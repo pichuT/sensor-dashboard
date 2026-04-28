@@ -1,0 +1,115 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+
+body {
+  font-family: sans-serif;
+  background: #f0f0f0;
+  color: #111;
+}
+
+.app {
+  padding: 2rem;
+  max-width: 1200px;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* ── Header ── */
+.header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.header h1  { font-size: 20px; font-weight: 600; margin-bottom: 4px; }
+.subtitle   { font-size: 13px; color: #888; }
+
+.badge {
+  font-size: 12px;
+  padding: 4px 12px;
+  background: #e8f4fd;
+  color: #378add;
+  border-radius: 20px;
+  border: 1px solid #c5e1f5;
+  white-space: nowrap;
+}
+
+/* ── Stat cards ── */
+.cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+
+.card {
+  background: #fff;
+  border-radius: 10px;
+  padding: 0.9rem 1rem;
+  border: 1px solid #e5e5e5;
+}
+
+.card-label { font-size: 12px; color: #888; margin-bottom: 4px; }
+.card-value { font-size: 22px; font-weight: 600; }
+.card-unit  { font-size: 11px; color: #aaa; margin-top: 2px; }
+
+/* ── Chart blocks ── */
+.chart-block {
+  background: #fff;
+  border-radius: 10px;
+  padding: 1.1rem 1.2rem;
+  border: 1px solid #e5e5e5;
+}
+
+.chart-block--full {
+  grid-column: 1 / -1;
+}
+
+.chart-title {
+  font-size: 13px;
+  font-weight: 500;
+  color: #444;
+  margin-bottom: 12px;
+}
+
+/* ── 2-col grid ── */
+.charts-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+}
+
+/* ── No GPS fallback ── */
+.no-gps {
+  height: 200px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  color: #aaa;
+  font-size: 14px;
+  text-align: center;
+  gap: 6px;
+}
+
+.no-gps small { font-size: 12px; color: #ccc; }
+
+/* ── Status messages ── */
+.status-msg {
+  padding: 4rem 2rem;
+  text-align: center;
+  font-size: 15px;
+  color: #888;
+}
+
+.status-msg.error { color: #c0392b; }
+.status-msg small { display: block; margin-top: 8px; font-size: 12px; color: #aaa; }
+
+/* ── Responsive ── */
+@media (max-width: 700px) {
+  .charts-grid { grid-template-columns: 1fr; }
+  .chart-block--full { grid-column: auto; }
+  .app { padding: 1rem; }
+}
