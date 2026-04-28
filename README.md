@@ -1,6 +1,6 @@
 # Balloon Flight Dashboard
 
-A React-based web dashboard for visualizing stratospheric balloon sensor data from an Excel file. Built for the LMU CubeSat/Balloon Research Project.
+A React-based web dashboard for visualizing stratospheric balloon sensor data from an Excel file. 
 
 ## What It Shows
 
@@ -13,16 +13,41 @@ A React-based web dashboard for visualizing stratospheric balloon sensor data fr
 - **Humidity** over time
 - Stat cards for max altitude, latest readings, satellite count
 
-## Requirements
+## Prerequisites
 
-- [Node.js](https://nodejs.org/) v18 or higher
-- npm (comes with Node)
+You need Node.js installed before anything else. npm comes with it automatically.
+
+### Installing Node.js on Mac
+1. Go to [https://nodejs.org/](https://nodejs.org/)
+2. Click the **LTS** button to download (says "Recommended for most users")
+3. Open the downloaded `.pkg` file
+4. Click through the installer — Next, Agree, Install
+5. Open **Terminal** (search for it in Spotlight with `Cmd + Space`)
+6. Type these to confirm it worked:
+```bash
+node -v
+npm -v
+```
+Both should print a version number like `v20.x.x`. If they do, you're good.
+
+### Installing Node.js on Windows
+1. Go to [https://nodejs.org/](https://nodejs.org/)
+2. Click the **LTS** button to download
+3. Open the downloaded `.msi` file
+4. Click through the installer — Next, Accept, Next, Install
+5. Open **Command Prompt** (search for it in the Start menu)
+6. Type these to confirm it worked:
+```bash
+node -v
+npm -v
+```
+Both should print a version number like `v20.x.x`. If they do, you're good.
 
 ## Installation
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/pichuT/sensor-dashboard.git
+git clone https://github.com/YOUR_USERNAME/sensor-dashboard.git
 cd sensor-dashboard
 
 # 2. Install dependencies
@@ -50,27 +75,36 @@ The dashboard reads from `public/balloon_flight_data.xlsx` by default. If your f
 const FILE_PATH = "/balloon_flight_data.xlsx";
 ```
 
-## Expected Excel Column Headers
+## Column Headers
 
-Your Excel file should have the following columns (row 1 as headers):
+The dashboard **automatically detects** your column headers — you do not need to use specific names. It recognizes a wide range of naming styles including:
 
-| Column | Example Value |
+| Sensor | Examples it recognizes |
 |---|---|
-| Timestamp | 2025-04-10 10:01:00 |
-| Temperature (C) | 23.41 |
-| Pressure (hPa) | 955.51 |
-| Humidity (%) | 61.38 |
-| Altitude (m) | 37.08 |
-| Accel_X | 0.02 |
-| Accel_Y | 0.23 |
-| Accel_Z | 179.99 |
-| Latitude | 33.969400 |
-| Longitude | -118.416400 |
-| GPS_Altitude (m) | 37.08 |
-| Satellites | 7 |
-| GPS_Valid | YES |
+| Timestamp | `Timestamp`, `Time`, `DateTime`, `recordTime`, `date_time` |
+| Temperature | `Temperature`, `Temp`, `Temp_C`, `tempCelsius`, `TEMP (degC)` |
+| Pressure | `Pressure`, `Pres`, `Baro`, `Pressure_hPa`, `baroPress` |
+| Humidity | `Humidity`, `Humid`, `RH`, `Rel_Humidity`, `humidityPct` |
+| Altitude | `Altitude`, `Alt`, `Height`, `Baro_Alt_m`, `altMeters` |
+| Accel X | `Accel_X`, `Gyro_X`, `IMU_X`, `Motion_X`, `AX`, `X` |
+| Accel Y | `Accel_Y`, `Gyro_Y`, `IMU_Y`, `Motion_Y`, `AY`, `Y` |
+| Accel Z | `Accel_Z`, `Gyro_Z`, `IMU_Z`, `Motion_Z`, `AZ`, `Z` |
+| Latitude | `Latitude`, `Lat`, `GPS_Lat`, `gpsLatitude` |
+| Longitude | `Longitude`, `Lon`, `Lng`, `GPS_Lon`, `gpsLongitude` |
+| GPS Altitude | `GPS_Altitude`, `GPS_Alt`, `GPS_Alt_m`, `gpsAltitude` |
+| Satellites | `Satellites`, `Sats`, `SVs`, `Num_Satellites`, `gpsSatellites` |
+| GPS Valid | `GPS_Valid`, `Fix_Valid`, `GPSLock`, `GPS_Status`, `gpsValid` |
 
-> The GPS flight path chart only renders when `GPS_Valid` is `YES` and coordinates are non-zero. This is expected behavior — GPS shows `NO` and `0.000000` until the module gets a satellite lock.
+If a column isn't recognized, the dashboard will show a "Column not found" placeholder for that chart instead of crashing. You can expand the **"Show detected columns"** panel at the top of the dashboard to see exactly what was matched and what wasn't.
+
+## GPS Flight Path
+
+The GPS path chart only renders when:
+- Latitude and Longitude columns are detected
+- `GPS_Valid` (or equivalent) is `YES`
+- Coordinates are non-zero
+
+This is expected — GPS shows `NO` and `0.000000` until the module gets a satellite lock in the air.
 
 ## Tech Stack
 
