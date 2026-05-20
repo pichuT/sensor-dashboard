@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import * as XLSX from "xlsx";
 import {
   LineChart, Line, XAxis, YAxis, CartesianGrid,
@@ -7,7 +7,13 @@ import {
 } from "recharts";
 import "./App.css";
 
-const FILE_PATH = "/balloon_flight_data.xlsx";
+const FILE_PATH        = "/balloon_flight_data.xlsx";
+const LIVE_URL         = "http://localhost:8000/data";
+const LOG_URL          = "http://localhost:8000/log";
+const LIVE_INTERVAL_MS = 3000;
+
+// Toggle: false = static Excel mode, true = live serial mode
+const LIVE_MODE = true;
 
 const COLORS = {
   altitude:    "#9b59b6",
@@ -20,29 +26,34 @@ const COLORS = {
   z: "#2ecc71",
 };
 
-// Each sensor has a list of possible header name variations (all lowercase for matching)
+const LOG_COLORS = {
+  error:   "#e74c3c",
+  warning: "#f39c12",
+  success: "#2ecc71",
+  packet:  "#378add",
+  info:    "#aaaaaa",
+};
+
 const SENSOR_MATCHERS = [
-  { id: "timestamp",    color: null,              patterns: ["timestamp", "time", "datetime", "date"] },
-  { id: "temperature",  color: COLORS.temperature, patterns: ["temperature", "temp", "t c", "tc"] },
-  { id: "pressure",     color: COLORS.pressure,   patterns: ["pressure", "preassure", "presure", "pres", "baro", "p hpa", "phpa"] },
-  { id: "humidity",     color: COLORS.humidity,   patterns: ["humidity", "humid", "humpct", "hum pct", "rel hum", "relhum", "rh"] },
-  { id: "altitude",     color: COLORS.altitude,   patterns: ["altitude", "alt", "height"] },
-  { id: "accel_x",      color: COLORS.x,          patterns: ["accel x", "accelx", "acc x", "accx", "gyro x", "gyrox", "motion x", "accelerometer x", "imu x", "imux", "ax", "^x"] },
-  { id: "accel_y",      color: COLORS.y,          patterns: ["accel y", "accely", "acc y", "accy", "gyro y", "gyroy", "motion y", "accelerometer y", "imu y", "imuy", "ay", "^y"] },
-  { id: "accel_z",      color: COLORS.z,          patterns: ["accel z", "accelz", "acc z", "accz", "gyro z", "gyroz", "motion z", "accelerometer z", "imu z", "imuz", "az", "^z"] },
-  { id: "latitude",     color: "#378add",         patterns: ["latitude", "gps_lat", "gpslat", "lat"] },
-  { id: "longitude",    color: "#378add",         patterns: ["longitude", "gps_lon", "gpslon", "lon", "lng", "long"] },
-  { id: "gps_altitude", color: COLORS.gpsAlt,    patterns: ["gps alt", "gpsalt", "gps altitude", "gps altitude m", "gpsaltitude", "gps height", "gpsheight"] },
-  { id: "satellites",   color: "#888",            patterns: ["satellites", "num sat", "sats", "sat", "svs", "^sv"] },
-  { id: "gps_valid",    color: null,              patterns: ["gps valid", "gpsvalid", "fix valid", "gps fix", "gpsfix", "gpsok", "gps ok", "gps status", "gpsstatus", "gpslock", "gps lock", "valid"] },
+  { id: "timestamp",    color: null,              patterns: ["timestamp"] },
+  { id: "temperature",  color: COLORS.temperature, patterns: ["temperature"] },
+  { id: "pressure",     color: COLORS.pressure,   patterns: ["pressure"] },
+  { id: "humidity",     color: COLORS.humidity,   patterns: ["humidity"] },
+  { id: "altitude",     color: COLORS.altitude,   patterns: ["altitude"] },
+  { id: "accel_x",      color: COLORS.x,          patterns: ["accel_x"] },
+  { id: "accel_y",      color: COLORS.y,          patterns: ["accel_y"] },
+  { id: "accel_z",      color: COLORS.z,          patterns: ["accel_z"] },
+  { id: "latitude",     color: "#378add",         patterns: ["latitude"] },
+  { id: "longitude",    color: "#378add",         patterns: ["longitude"] },
+  { id: "gps_altitude", color: COLORS.gpsAlt,    patterns: ["gps_altitude"] },
+  { id: "satellites",   color: "#888",            patterns: ["satellites"] },
+  { id: "gps_valid",    color: null,              patterns: ["gps_valid"] },
 ];
 
-// Normalize: lowercase, replace underscores/special chars with space, collapse spaces
 function normalize(str) {
   return str.toLowerCase().replace(/_/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
 }
 
-// Takes the actual headers from the file, returns a map of { sensorId -> actualHeaderName }
 function detectColumns(headers) {
   const map = {};
   for (const sensor of SENSOR_MATCHERS) {
@@ -50,7 +61,6 @@ function detectColumns(headers) {
       const n = normalize(h);
       return sensor.patterns.some((p) => {
         const np = p.replace(/_/g, " ");
-        // exact-only patterns are marked with ^ prefix
         if (np.startsWith("^")) return n === np.slice(1);
         return n.includes(np);
       });
@@ -60,7 +70,35 @@ function detectColumns(headers) {
   return map;
 }
 
-/* ── Reusable line chart ── */
+// ── Packet Log Panel ──────────────────────────────────────────────────────────
+// Side panel showing live Serial output from the receiver, color-coded by type.
+// Auto-scrolls to the bottom as new lines arrive.
+function PacketLog({ logLines }) {
+  
+  return (
+    <div className="packet-log">
+      <div className="packet-log-header">
+        <span>Serial Log</span>
+        <span className="packet-log-count">{logLines.length} lines</span>
+      </div>
+      <div className="packet-log-body">
+        {logLines.length === 0 && (
+          <p className="packet-log-empty">Waiting for packets...</p>
+        )}
+        {logLines.map((entry, i) => (
+          <div key={i} className="packet-log-line">
+            <span className="packet-log-time">{entry.time}</span>
+            <span className="packet-log-text" style={{ color: LOG_COLORS[entry.color] ?? "#aaa" }}>
+              {entry.text}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ── Chart components ───────────────────────────────────────────────────────────
 function SensorLine({ data, lines, title, height = 220, xKey }) {
   return (
     <div className="chart-block">
@@ -69,18 +107,15 @@ function SensorLine({ data, lines, title, height = 220, xKey }) {
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.12)" />
-            <XAxis
-              dataKey={xKey}
-              tick={{ fontSize: 10, fill: "#888" }}
+            <XAxis dataKey={xKey} tick={{ fontSize: 10, fill: "#888" }}
               tickFormatter={(v) => typeof v === "string" ? v.slice(11, 16) : v}
-              interval="preserveStartEnd"
-            />
+              interval="preserveStartEnd" />
             <YAxis tick={{ fontSize: 10, fill: "#888" }} width={52} />
             <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(v) => `Time: ${v}`} />
             {lines.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
             {lines.map((l) => (
               <Line key={l.key} type="monotone" dataKey={l.key} name={l.label ?? l.key}
-                stroke={l.color} dot={false} strokeWidth={2} />
+                stroke={l.color} dot={false} strokeWidth={2} isAnimationActive={false} />
             ))}
           </LineChart>
         </ResponsiveContainer>
@@ -89,12 +124,10 @@ function SensorLine({ data, lines, title, height = 220, xKey }) {
   );
 }
 
-/* ── Pressure vs Altitude scatter ── */
 function PressureAltScatter({ data, colMap }) {
   const altKey  = colMap["altitude"];
   const presKey = colMap["pressure"];
   if (!altKey || !presKey) return <MissingChart title="Pressure vs Altitude (scatter)" />;
-
   const points = data.map((r) => ({ alt: r[altKey], pres: r[presKey] }));
   return (
     <div className="chart-block">
@@ -103,7 +136,7 @@ function PressureAltScatter({ data, colMap }) {
         <ResponsiveContainer width="100%" height="100%">
           <ScatterChart margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.12)" />
-            <XAxis dataKey="alt"  name="Altitude" unit=" m"   tick={{ fontSize: 10, fill: "#888" }}
+            <XAxis dataKey="alt" name="Altitude" unit=" m" tick={{ fontSize: 10, fill: "#888" }}
               label={{ value: "Altitude (m)", position: "insideBottom", offset: -2, fontSize: 11, fill: "#aaa" }} />
             <YAxis dataKey="pres" name="Pressure" unit=" hPa" tick={{ fontSize: 10, fill: "#888" }} width={52} />
             <ZAxis range={[18, 18]} />
@@ -117,19 +150,16 @@ function PressureAltScatter({ data, colMap }) {
   );
 }
 
-/* ── GPS flight path ── */
 function GPSPath({ data, colMap }) {
   const latKey   = colMap["latitude"];
   const lonKey   = colMap["longitude"];
   const validKey = colMap["gps_valid"];
-
   const valid = data.filter((r) => {
     if (validKey && r[validKey] !== "YES") return false;
     if (!latKey || !lonKey) return false;
     if (r[latKey] === 0 && r[lonKey] === 0) return false;
     return true;
   });
-
   if (!latKey || !lonKey || valid.length === 0) {
     return (
       <div className="chart-block chart-block--full">
@@ -141,7 +171,6 @@ function GPSPath({ data, colMap }) {
       </div>
     );
   }
-
   const points = valid.map((r) => ({ lat: r[latKey], lon: r[lonKey] }));
   return (
     <div className="chart-block chart-block--full">
@@ -166,7 +195,6 @@ function GPSPath({ data, colMap }) {
   );
 }
 
-/* ── Missing column fallback ── */
 function MissingChart({ title }) {
   return (
     <div className="chart-block">
@@ -176,7 +204,6 @@ function MissingChart({ title }) {
   );
 }
 
-/* ── Stat card ── */
 function StatCard({ label, value, unit, color }) {
   return (
     <div className="card">
@@ -187,13 +214,12 @@ function StatCard({ label, value, unit, color }) {
   );
 }
 
-/* ── Column map debug panel ── */
 function ColMapPanel({ colMap, headers }) {
   const [open, setOpen] = useState(false);
   return (
     <div className="debug-panel">
       <button className="debug-toggle" onClick={() => setOpen((o) => !o)}>
-        {open ? "▲ Hide" : "▼ Show"} detected columns
+        {open ? "Hide" : "Show"} detected columns
       </button>
       {open && (
         <div className="debug-body">
@@ -204,7 +230,7 @@ function ColMapPanel({ colMap, headers }) {
             <p key={id} className="debug-mono"><strong>{id}</strong> → "{col}"</p>
           ))}
           {SENSOR_MATCHERS.filter((s) => !colMap[s.id]).map((s) => (
-            <p key={s.id} className="debug-mono debug-miss"><strong>{s.id}</strong> → ⚠️ not found</p>
+            <p key={s.id} className="debug-mono debug-miss"><strong>{s.id}</strong> → not found</p>
           ))}
         </div>
       )}
@@ -212,15 +238,18 @@ function ColMapPanel({ colMap, headers }) {
   );
 }
 
-/* ── App ── */
+// ── App ────────────────────────────────────────────────────────────────────────
 export default function App() {
-  const [data, setData]       = useState([]);
-  const [headers, setHeaders] = useState([]);
-  const [colMap, setColMap]   = useState({});
-  const [error, setError]     = useState(null);
-  const [loading, setLoading] = useState(true);
+  const [data, setData]           = useState([]);
+  const [headers, setHeaders]     = useState([]);
+  const [colMap, setColMap]       = useState({});
+  const [error, setError]         = useState(null);
+  const [loading, setLoading]     = useState(true);
+  const [lastUpdate, setLastUpdate] = useState(null);
+  const [logLines, setLogLines]   = useState([]);
+  const intervalRef               = useRef(null);
 
-  useEffect(() => {
+  function loadExcel() {
     fetch(FILE_PATH)
       .then((res) => {
         if (!res.ok) throw new Error(`Could not load file: ${FILE_PATH}`);
@@ -238,6 +267,40 @@ export default function App() {
       })
       .catch((err) => setError(err.message))
       .finally(() => setLoading(false));
+  }
+
+  function fetchLive() {
+    // Fetch sensor data and log lines in parallel
+    Promise.all([
+      fetch(LIVE_URL).then((r) => r.json()),
+      fetch(LOG_URL).then((r) => r.json()),
+    ])
+      .then(([rows, log]) => {
+        if (rows.length > 0) {
+          const hdrs = Object.keys(rows[0]);
+          setHeaders(hdrs);
+          setColMap(detectColumns(hdrs));
+          setData(rows);
+        }
+        setLogLines(log);
+        setLastUpdate(new Date().toLocaleTimeString());
+        setLoading(false);
+        setError(null);
+      })
+      .catch((err) => {
+        setError(err.message + " — is serial_listener.py running?");
+        setLoading(false);
+      });
+  }
+
+  useEffect(() => {
+    if (LIVE_MODE) {
+      fetchLive();
+      intervalRef.current = setInterval(fetchLive, LIVE_INTERVAL_MS);
+    } else {
+      loadExcel();
+    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
   }, []);
 
   const latest = data[data.length - 1];
@@ -246,42 +309,40 @@ export default function App() {
     ? Math.max(...data.map((r) => r[colMap["altitude"]] ?? 0)).toFixed(1)
     : null;
 
-  if (loading) return <div className="status-msg">Loading flight data...</div>;
-  if (error)   return (
-    <div className="status-msg error">
-      ⚠️ {error}<br />
-      <small>Make sure balloon_flight_data.xlsx is inside the public/ folder.</small>
+  if (loading) return (
+    <div className="status-msg">
+      {LIVE_MODE ? "Waiting for live data from serial_listener.py..." : "Loading flight data..."}
     </div>
   );
 
-  return (
-    <div className="app">
-      <div className="header">
-        <div>
-          <h1>Balloon Flight Dashboard</h1>
-          <p className="subtitle">{data.length} readings · {latest?.[xKey]?.toString().slice(0, 10)}</p>
-        </div>
-        <div className="badge">Static · From Excel</div>
-      </div>
+  if (error) return (
+    <div className="status-msg error">
+      {error}<br />
+      {LIVE_MODE
+        ? <small>Run: python3 serial_listener.py --port /dev/cu.usbmodem101</small>
+        : <small>Make sure balloon_flight_data.xlsx is inside the public/ folder.</small>}
+    </div>
+  );
 
+  // Charts content — same as before, extracted for layout clarity
+  const charts = (
+    <>
       <ColMapPanel colMap={colMap} headers={headers} />
 
       <div className="cards">
-        <StatCard label="Max Altitude"    value={maxAlt}                                      unit="m"    color={COLORS.altitude} />
-        <StatCard label="Temperature"     value={colMap["temperature"] ? latest?.[colMap["temperature"]] : null} unit="°C"   color={COLORS.temperature} />
-        <StatCard label="Pressure"        value={colMap["pressure"]    ? latest?.[colMap["pressure"]]    : null} unit="hPa"  color={COLORS.pressure} />
-        <StatCard label="Humidity"        value={colMap["humidity"]    ? latest?.[colMap["humidity"]]    : null} unit="%"    color={COLORS.humidity} />
-        <StatCard label="Satellites"      value={colMap["satellites"]  ? latest?.[colMap["satellites"]]  : null} unit="sats" color="#888" />
-        <StatCard label="Total Readings"  value={data.length}                                 unit="rows" color="#888" />
+        <StatCard label="Max Altitude"   value={maxAlt}                                                           unit="m"    color={COLORS.altitude} />
+        <StatCard label="Temperature"    value={colMap["temperature"] ? latest?.[colMap["temperature"]] : null}   unit="°C"   color={COLORS.temperature} />
+        <StatCard label="Pressure"       value={colMap["pressure"]    ? latest?.[colMap["pressure"]]    : null}   unit="hPa"  color={COLORS.pressure} />
+        <StatCard label="Humidity"       value={colMap["humidity"]    ? latest?.[colMap["humidity"]]    : null}   unit="%"    color={COLORS.humidity} />
+        <StatCard label="Satellites"     value={colMap["satellites"]  ? latest?.[colMap["satellites"]]  : null}   unit="sats" color="#888" />
+        <StatCard label="Total Readings" value={data.length}                                                      unit="rows" color="#888" />
       </div>
 
-      {/* Altitude hero */}
       {colMap["altitude"]
         ? <SensorLine data={data} xKey={xKey} title="Altitude over Time" height={260}
             lines={[{ key: colMap["altitude"], label: "Altitude (m)", color: COLORS.altitude }]} />
         : <MissingChart title="Altitude over Time" />}
 
-      {/* Temp + Pressure */}
       <div className="charts-grid">
         {colMap["temperature"]
           ? <SensorLine data={data} xKey={xKey} title="Temperature (°C)"
@@ -293,7 +354,6 @@ export default function App() {
           : <MissingChart title="Pressure" />}
       </div>
 
-      {/* Scatter + GPS Alt vs Baro Alt */}
       <div className="charts-grid">
         <PressureAltScatter data={data} colMap={colMap} />
         {colMap["altitude"] && colMap["gps_altitude"]
@@ -305,10 +365,8 @@ export default function App() {
           : <MissingChart title="GPS Altitude vs Barometric Altitude" />}
       </div>
 
-      {/* GPS path */}
       <GPSPath data={data} colMap={colMap} />
 
-      {/* Motion + Humidity */}
       <div className="charts-grid">
         {colMap["accel_x"] && colMap["accel_y"] && colMap["accel_z"]
           ? <SensorLine data={data} xKey={xKey} title="Motion Sensor (X / Y / Z)"
@@ -323,6 +381,33 @@ export default function App() {
               lines={[{ key: colMap["humidity"], label: "Humidity", color: COLORS.humidity }]} />
           : <MissingChart title="Humidity" />}
       </div>
+    </>
+  );
+
+  return (
+    <div className="app">
+      <div className="header">
+        <div>
+          <h1>Balloon Flight Dashboard</h1>
+          <p className="subtitle">
+            {data.length} readings
+            {latest?.[xKey] ? ` · ${latest[xKey].toString().slice(0, 10)}` : ""}
+          </p>
+        </div>
+        <div className="badge" style={{ background: LIVE_MODE ? "#1d9e75" : "#555" }}>
+          {LIVE_MODE ? `Live · Updated ${lastUpdate ?? "..."}` : "Static · From Excel"}
+        </div>
+      </div>
+
+      {/* Side-by-side layout in live mode, full-width in static mode */}
+      {LIVE_MODE ? (
+        <div className="live-layout">
+          <div className="live-charts">{charts}</div>
+          <PacketLog logLines={logLines} />
+        </div>
+      ) : (
+        charts
+      )}
     </div>
   );
 }

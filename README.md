@@ -1,110 +1,165 @@
-# Balloon Flight Dashboard
+# CubeSat SOAR26 — Balloon Flight Dashboard
 
-A React-based web dashboard for visualizing stratospheric balloon sensor data from an Excel file. 
+A React-based web dashboard for visualizing stratospheric balloon sensor data. Supports two modes: post-flight analysis from an Excel file, and live streaming directly from the ground station receiver over Serial.
 
 ## What It Shows
 
-- **Altitude** over time (full ascent/descent arc)
+- **Altitude** over time 
 - **Temperature** and **Pressure** over time
-- **Pressure vs Altitude** scatter plot (validates barometric readings)
+- **Pressure vs Altitude** scatter plot 
 - **GPS Altitude vs Barometric Altitude** overlay
 - **GPS Flight Path** trace (lat/lon)
 - **Motion Sensor** (X, Y, Z axes)
 - **Humidity** over time
 - Stat cards for max altitude, latest readings, satellite count
+- **Live Serial Log** panel showing real-time packet status from the receiver (live mode only)
+
+## Two Modes
+
+### Static Mode (post-flight)
+Reads from a local Excel file you drop into the `public/` folder. Good for reviewing data after a flight.
+
+### Live Mode (during flight)
+Streams data directly from the ground station receiver over USB Serial in real time. Charts update automatically every 3 seconds as packets arrive from the CubeSat.
+
+To switch modes, change this line in `src/App.jsx`:
+```js
+const LIVE_MODE = false; // false = static Excel, true = live serial
+```
 
 ## Prerequisites
 
-You need Node.js installed before anything else. npm comes with it automatically.
+You need Node.js and Python 3 installed.
 
 ### Installing Node.js on Mac
 1. Go to [https://nodejs.org/](https://nodejs.org/)
-2. Click the **LTS** button to download (says "Recommended for most users")
-3. Open the downloaded `.pkg` file
-4. Click through the installer — Next, Agree, Install
-5. Open **Terminal** (search for it in Spotlight with `Cmd + Space`)
-6. Type these to confirm it worked:
+2. Click the **LTS** button to download
+3. Open the downloaded `.pkg` file and click through the installer
+4. Confirm it worked:
 ```bash
 node -v
 npm -v
 ```
-Both should print a version number like `v20.x.x`. If they do, you're good.
 
 ### Installing Node.js on Windows
 1. Go to [https://nodejs.org/](https://nodejs.org/)
 2. Click the **LTS** button to download
-3. Open the downloaded `.msi` file
-4. Click through the installer — Next, Accept, Next, Install
-5. Open **Command Prompt** (search for it in the Start menu)
-6. Type these to confirm it worked:
+3. Open the `.msi` file and click through the installer
+4. Confirm it worked:
 ```bash
 node -v
 npm -v
 ```
-Both should print a version number like `v20.x.x`. If they do, you're good.
+
+### Python dependencies
+```bash
+pip3 install openpyxl pyserial flask flask-cors
+```
 
 ## Installation
 
 ```bash
 # 1. Clone the repo
-git clone https://github.com/YOUR_USERNAME/sensor-dashboard.git
+git clone https://github.com/pichuT/sensor-dashboard.git
 cd sensor-dashboard
 
 # 2. Install dependencies
 npm install
 ```
 
-## Running the Dashboard
+## Running the Dashboard (Static Mode)
 
+1. Add your sensor data to `public/balloon_flight_data.xlsx` (see below)
+2. Make sure `LIVE_MODE = false` in `src/App.jsx`
+3. Run:
 ```bash
 npm run dev
 ```
+4. Open [http://localhost:5173](http://localhost:5173)
 
-Then open [http://localhost:5173](http://localhost:5173) in your browser.
+## Running the Dashboard (Live Mode)
 
-## Adding Your Flight Data
+You need three terminals running simultaneously.
 
-1. Export your sensor data as an Excel file (`.xlsx`)
-2. Rename it to `balloon_flight_data.xlsx`
-3. Drop it into the `public/` folder
-4. Refresh the browser
+**Terminal 1 — Start the serial listener:**
+```bash
+python3 serial_listener.py --port /dev/cu.usbmodem101 --baud 115200
+```
+Replace `/dev/cu.usbmodem101` with your actual port. On Windows use `COMx`.
 
-The dashboard reads from `public/balloon_flight_data.xlsx` by default. If your file has a different name, update this line in `src/App.jsx`:
+**Terminal 2 — Start the dashboard:**
+```bash
+npm run dev
+```
+Make sure `LIVE_MODE = true` in `src/App.jsx`.
 
-```js
-const FILE_PATH = "/balloon_flight_data.xlsx";
+**Terminal 3 — Trigger the CubeSat to start transmitting:**
+```bash
+python3 -c "import serial; s = serial.Serial('/dev/cu.usbmodem101', 115200); s.write(b'START\n'); s.close()"
+```
+
+Then open [http://localhost:5173](http://localhost:5173) and watch the dashboard update live.
+
+## Converting SD Card Data to Excel (Static Mode)
+
+After a flight, copy the `sensor_*.txt` files off the SD card and run:
+
+```bash
+python3 convert_to_excel.py sensor_41817.txt
+```
+
+For multiple files (one row per reading):
+```bash
+python3 convert_to_excel.py sensor_41817.txt sensor_31352.txt sensor_4111.txt
+```
+
+This generates `balloon_flight_data.xlsx`. Drop it into the `public/` folder and refresh the dashboard.
+
+## Project Structure
+
+```
+sensor-dashboard/
+├── public/
+│   └── balloon_flight_data.xlsx   ← data file goes here
+├── src/
+│   ├── App.jsx                    ← main dashboard component
+│   ├── App.css                    ← styles
+│   └── main.jsx                   ← React entry point
+├── convert_to_excel.py            ← converts sensor .txt files to Excel
+├── serial_listener.py             ← reads receiver Serial and serves live JSON
+├── index.html
+├── package.json
+└── vite.config.js
 ```
 
 ## Column Headers
 
-The dashboard **automatically detects** your column headers — you do not need to use specific names. It recognizes a wide range of naming styles including:
+The dashboard matches these exact column names output by `convert_to_excel.py` and `serial_listener.py`:
 
-| Sensor | Examples it recognizes |
+| Sensor | Column Name |
 |---|---|
-| Timestamp | `Timestamp`, `Time`, `DateTime`, `recordTime`, `date_time` |
-| Temperature | `Temperature`, `Temp`, `Temp_C`, `tempCelsius`, `TEMP (degC)` |
-| Pressure | `Pressure`, `Pres`, `Baro`, `Pressure_hPa`, `baroPress` |
-| Humidity | `Humidity`, `Humid`, `RH`, `Rel_Humidity`, `humidityPct` |
-| Altitude | `Altitude`, `Alt`, `Height`, `Baro_Alt_m`, `altMeters` |
-| Accel X | `Accel_X`, `Gyro_X`, `IMU_X`, `Motion_X`, `AX`, `X` |
-| Accel Y | `Accel_Y`, `Gyro_Y`, `IMU_Y`, `Motion_Y`, `AY`, `Y` |
-| Accel Z | `Accel_Z`, `Gyro_Z`, `IMU_Z`, `Motion_Z`, `AZ`, `Z` |
-| Latitude | `Latitude`, `Lat`, `GPS_Lat`, `gpsLatitude` |
-| Longitude | `Longitude`, `Lon`, `Lng`, `GPS_Lon`, `gpsLongitude` |
-| GPS Altitude | `GPS_Altitude`, `GPS_Alt`, `GPS_Alt_m`, `gpsAltitude` |
-| Satellites | `Satellites`, `Sats`, `SVs`, `Num_Satellites`, `gpsSatellites` |
-| GPS Valid | `GPS_Valid`, `Fix_Valid`, `GPSLock`, `GPS_Status`, `gpsValid` |
-
-If a column isn't recognized, the dashboard will show a "Column not found" placeholder for that chart instead of crashing. You can expand the **"Show detected columns"** panel at the top of the dashboard to see exactly what was matched and what wasn't.
+| Timestamp | `Timestamp` |
+| Temperature | `Temperature` |
+| Pressure | `Pressure` |
+| Humidity | `Humidity` |
+| Altitude | `Altitude` |
+| Accel X | `Accel_X` |
+| Accel Y | `Accel_Y` |
+| Accel Z | `Accel_Z` |
+| Latitude | `Latitude` |
+| Longitude | `Longitude` |
+| GPS Altitude | `GPS_Altitude` |
+| Satellites | `Satellites` |
+| GPS Valid | `GPS_Valid` |
 
 ## GPS Flight Path
 
 The GPS path chart only renders when:
 - Latitude and Longitude columns are detected
-- `GPS_Valid` (or equivalent) is `YES`
+- `GPS_Valid` is `YES`
 - Coordinates are non-zero
 
-This is expected — GPS shows `NO` and `0.000000` until the module gets a satellite lock in the air.
+GPS will show `NO` and `0.000000` until the module gets a satellite fix outdoors.
 
 ## Tech Stack
 
@@ -112,18 +167,5 @@ This is expected — GPS shows `NO` and `0.000000` until the module gets a satel
 - [Vite](https://vitejs.dev/) — dev server and bundler
 - [Recharts](https://recharts.org/) — charting library
 - [SheetJS (xlsx)](https://sheetjs.com/) — Excel file parsing
-
-## Project Structure
-
-```
-sensor-dashboard/
-├── public/
-│   └── balloon_flight_data.xlsx   ← your data file goes here
-├── src/
-│   ├── App.jsx                    ← main dashboard component
-│   ├── App.css                    ← styles
-│   └── main.jsx                   ← React entry point
-├── index.html
-├── package.json
-└── vite.config.js
-```
+- [Flask](https://flask.palletsprojects.com/) — live data server
+- [pyserial](https://pyserial.readthedocs.io/) — Serial port reading
