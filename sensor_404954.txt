@@ -1,0 +1,14 @@
+FINAL SENSOR DATA:
+Temperature:25.56 C
+Pressure:1005.30 hPa
+Humidity:52.89 %
+Altitude:68.60 m
+MOTION SENSOR VALUES:
+X:179.78 Y:0.11 Z:-0.52
+GPS DATA:
+Latitude:0.000000
+Longitude:0.000000
+GPS_Altitude:0.0 m
+Satellites:0
+GPS_Time:0
+GPS_Valid:NO

@@ -1,413 +1,539 @@
-import { useState, useEffect, useRef } from "react";
-import * as XLSX from "xlsx";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid,
-  Tooltip, ResponsiveContainer, Legend,
-  ScatterChart, Scatter, ZAxis
+  LineChart, Line, ScatterChart, Scatter,
+  XAxis, YAxis, CartesianGrid, Tooltip,
+  ResponsiveContainer, Legend,
 } from "recharts";
 import "./App.css";
 
-const FILE_PATH        = "/balloon_flight_data.xlsx";
-const LIVE_URL         = "http://localhost:8000/data";
-const LOG_URL          = "http://localhost:8000/log";
-const LIVE_INTERVAL_MS = 3000;
+const API = "http://localhost:5000/api";
+const POLL_MS = 5000;
 
-// Toggle: false = static Excel mode, true = live serial mode
-const LIVE_MODE = true;
-
-const COLORS = {
-  altitude:    "#9b59b6",
-  temperature: "#d85a30",
-  pressure:    "#1d9e75",
-  humidity:    "#378add",
-  gpsAlt:      "#e67e22",
-  x: "#e74c3c",
-  y: "#f39c12",
-  z: "#2ecc71",
+const C = {
+  temp:   "#ff6b6b",
+  pres:   "#4ecdc4",
+  hum:    "#a29bfe",
+  alt:    "#ffd93d",
+  gpsAlt: "#55efc4",
+  border: "#1e293b",
+  muted:  "#64748b",
 };
-
-const LOG_COLORS = {
-  error:   "#e74c3c",
-  warning: "#f39c12",
-  success: "#2ecc71",
-  packet:  "#378add",
-  info:    "#aaaaaa",
-};
-
-const SENSOR_MATCHERS = [
-  { id: "timestamp",    color: null,              patterns: ["timestamp"] },
-  { id: "temperature",  color: COLORS.temperature, patterns: ["temperature"] },
-  { id: "pressure",     color: COLORS.pressure,   patterns: ["pressure"] },
-  { id: "humidity",     color: COLORS.humidity,   patterns: ["humidity"] },
-  { id: "altitude",     color: COLORS.altitude,   patterns: ["altitude"] },
-  { id: "accel_x",      color: COLORS.x,          patterns: ["accel_x"] },
-  { id: "accel_y",      color: COLORS.y,          patterns: ["accel_y"] },
-  { id: "accel_z",      color: COLORS.z,          patterns: ["accel_z"] },
-  { id: "latitude",     color: "#378add",         patterns: ["latitude"] },
-  { id: "longitude",    color: "#378add",         patterns: ["longitude"] },
-  { id: "gps_altitude", color: COLORS.gpsAlt,    patterns: ["gps_altitude"] },
-  { id: "satellites",   color: "#888",            patterns: ["satellites"] },
-  { id: "gps_valid",    color: null,              patterns: ["gps_valid"] },
-];
-
-function normalize(str) {
-  return str.toLowerCase().replace(/_/g, " ").replace(/[^a-z0-9\s]/g, " ").replace(/\s+/g, " ").trim();
-}
-
-function detectColumns(headers) {
-  const map = {};
-  for (const sensor of SENSOR_MATCHERS) {
-    const match = headers.find((h) => {
-      const n = normalize(h);
-      return sensor.patterns.some((p) => {
-        const np = p.replace(/_/g, " ");
-        if (np.startsWith("^")) return n === np.slice(1);
-        return n.includes(np);
-      });
-    });
-    if (match) map[sensor.id] = match;
-  }
-  return map;
-}
-
-// ── Packet Log Panel ──────────────────────────────────────────────────────────
-// Side panel showing live Serial output from the receiver, color-coded by type.
-// Auto-scrolls to the bottom as new lines arrive.
-function PacketLog({ logLines }) {
-  
-  return (
-    <div className="packet-log">
-      <div className="packet-log-header">
-        <span>Serial Log</span>
-        <span className="packet-log-count">{logLines.length} lines</span>
-      </div>
-      <div className="packet-log-body">
-        {logLines.length === 0 && (
-          <p className="packet-log-empty">Waiting for packets...</p>
-        )}
-        {logLines.map((entry, i) => (
-          <div key={i} className="packet-log-line">
-            <span className="packet-log-time">{entry.time}</span>
-            <span className="packet-log-text" style={{ color: LOG_COLORS[entry.color] ?? "#aaa" }}>
-              {entry.text}
-            </span>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
-// ── Chart components ───────────────────────────────────────────────────────────
-function SensorLine({ data, lines, title, height = 220, xKey }) {
-  return (
-    <div className="chart-block">
-      <p className="chart-title">{title}</p>
-      <div style={{ height }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <LineChart data={data} margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.12)" />
-            <XAxis dataKey={xKey} tick={{ fontSize: 10, fill: "#888" }}
-              tickFormatter={(v) => typeof v === "string" ? v.slice(11, 16) : v}
-              interval="preserveStartEnd" />
-            <YAxis tick={{ fontSize: 10, fill: "#888" }} width={52} />
-            <Tooltip contentStyle={{ fontSize: 12 }} labelFormatter={(v) => `Time: ${v}`} />
-            {lines.length > 1 && <Legend wrapperStyle={{ fontSize: 12 }} />}
-            {lines.map((l) => (
-              <Line key={l.key} type="monotone" dataKey={l.key} name={l.label ?? l.key}
-                stroke={l.color} dot={false} strokeWidth={2} isAnimationActive={false} />
-            ))}
-          </LineChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function PressureAltScatter({ data, colMap }) {
-  const altKey  = colMap["altitude"];
-  const presKey = colMap["pressure"];
-  if (!altKey || !presKey) return <MissingChart title="Pressure vs Altitude (scatter)" />;
-  const points = data.map((r) => ({ alt: r[altKey], pres: r[presKey] }));
-  return (
-    <div className="chart-block">
-      <p className="chart-title">Pressure vs Altitude (scatter)</p>
-      <div style={{ height: 220 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 4, right: 16, left: 0, bottom: 4 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.12)" />
-            <XAxis dataKey="alt" name="Altitude" unit=" m" tick={{ fontSize: 10, fill: "#888" }}
-              label={{ value: "Altitude (m)", position: "insideBottom", offset: -2, fontSize: 11, fill: "#aaa" }} />
-            <YAxis dataKey="pres" name="Pressure" unit=" hPa" tick={{ fontSize: 10, fill: "#888" }} width={52} />
-            <ZAxis range={[18, 18]} />
-            <Tooltip cursor={{ strokeDasharray: "3 3" }} contentStyle={{ fontSize: 12 }}
-              formatter={(val, name) => [val, name]} />
-            <Scatter data={points} fill={COLORS.pressure} fillOpacity={0.6} />
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function GPSPath({ data, colMap }) {
-  const latKey   = colMap["latitude"];
-  const lonKey   = colMap["longitude"];
-  const validKey = colMap["gps_valid"];
-  const valid = data.filter((r) => {
-    if (validKey && r[validKey] !== "YES") return false;
-    if (!latKey || !lonKey) return false;
-    if (r[latKey] === 0 && r[lonKey] === 0) return false;
-    return true;
-  });
-  if (!latKey || !lonKey || valid.length === 0) {
-    return (
-      <div className="chart-block chart-block--full">
-        <p className="chart-title">GPS Flight Path</p>
-        <div className="no-gps">
-          No valid GPS readings found.<br />
-          <small>GPS_Valid was NO or coordinates were 0,0 for all rows.</small>
-        </div>
-      </div>
-    );
-  }
-  const points = valid.map((r) => ({ lat: r[latKey], lon: r[lonKey] }));
-  return (
-    <div className="chart-block chart-block--full">
-      <p className="chart-title">GPS Flight Path (Lat / Lon trace)</p>
-      <div style={{ height: 260 }}>
-        <ResponsiveContainer width="100%" height="100%">
-          <ScatterChart margin={{ top: 4, right: 16, left: 0, bottom: 20 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(128,128,128,0.12)" />
-            <XAxis dataKey="lon" name="Longitude" type="number" domain={["auto","auto"]}
-              tick={{ fontSize: 10, fill: "#888" }}
-              label={{ value: "Longitude", position: "insideBottom", offset: -10, fontSize: 11, fill: "#aaa" }} />
-            <YAxis dataKey="lat" name="Latitude" type="number" domain={["auto","auto"]}
-              tick={{ fontSize: 10, fill: "#888" }} width={72}
-              label={{ value: "Latitude", angle: -90, position: "insideLeft", fontSize: 11, fill: "#aaa" }} />
-            <ZAxis range={[24, 24]} />
-            <Tooltip contentStyle={{ fontSize: 12 }} formatter={(val, name) => [val.toFixed(6), name]} />
-            <Scatter data={points} fill="#378add" fillOpacity={0.75} />
-          </ScatterChart>
-        </ResponsiveContainer>
-      </div>
-    </div>
-  );
-}
-
-function MissingChart({ title }) {
-  return (
-    <div className="chart-block">
-      <p className="chart-title">{title}</p>
-      <div className="no-gps">Column not found in file.<br /><small>Header name didn't match any known variation.</small></div>
-    </div>
-  );
-}
 
 function StatCard({ label, value, unit, color }) {
   return (
-    <div className="card">
-      <p className="card-label">{label}</p>
-      <p className="card-value" style={{ color }}>{value ?? "—"}</p>
-      <p className="card-unit">{unit}</p>
+    <div className="stat-card" style={{ borderTopColor: color }}>
+      <p className="stat-label">{label}</p>
+      <p className="stat-value" style={{ color }}>{value ?? "—"}</p>
+      <p className="stat-unit">{unit}</p>
     </div>
   );
 }
 
-function ColMapPanel({ colMap, headers }) {
-  const [open, setOpen] = useState(false);
+function ChartTip({ active, payload }) {
+  if (!active || !payload?.length) return null;
   return (
-    <div className="debug-panel">
-      <button className="debug-toggle" onClick={() => setOpen((o) => !o)}>
-        {open ? "Hide" : "Show"} detected columns
-      </button>
-      {open && (
-        <div className="debug-body">
-          <p className="debug-section">Headers found in file:</p>
-          <p className="debug-mono">{headers.join(", ")}</p>
-          <p className="debug-section" style={{ marginTop: 10 }}>Matched sensors:</p>
-          {Object.entries(colMap).map(([id, col]) => (
-            <p key={id} className="debug-mono"><strong>{id}</strong> → "{col}"</p>
-          ))}
-          {SENSOR_MATCHERS.filter((s) => !colMap[s.id]).map((s) => (
-            <p key={s.id} className="debug-mono debug-miss"><strong>{s.id}</strong> → not found</p>
-          ))}
-        </div>
-      )}
+    <div className="chart-tip">
+      {payload.map((p) => (
+        <p key={p.dataKey} style={{ color: p.color }}>
+          {p.name}: <strong>{typeof p.value === "number" ? p.value.toFixed(2) : p.value}</strong>
+        </p>
+      ))}
     </div>
   );
 }
 
-// ── App ────────────────────────────────────────────────────────────────────────
-export default function App() {
-  const [data, setData]           = useState([]);
-  const [headers, setHeaders]     = useState([]);
-  const [colMap, setColMap]       = useState({});
-  const [error, setError]         = useState(null);
-  const [loading, setLoading]     = useState(true);
-  const [lastUpdate, setLastUpdate] = useState(null);
-  const [logLines, setLogLines]   = useState([]);
-  const intervalRef               = useRef(null);
-
-  function loadExcel() {
-    fetch(FILE_PATH)
-      .then((res) => {
-        if (!res.ok) throw new Error(`Could not load file: ${FILE_PATH}`);
-        return res.arrayBuffer();
-      })
-      .then((buf) => {
-        const wb   = XLSX.read(buf, { type: "array" });
-        const ws   = wb.Sheets[wb.SheetNames[0]];
-        const rows = XLSX.utils.sheet_to_json(ws);
-        if (rows.length === 0) throw new Error("Excel file is empty or has no data rows.");
-        const hdrs = Object.keys(rows[0]);
-        setHeaders(hdrs);
-        setColMap(detectColumns(hdrs));
-        setData(rows);
-      })
-      .catch((err) => setError(err.message))
-      .finally(() => setLoading(false));
-  }
-
-  function fetchLive() {
-    // Fetch sensor data and log lines in parallel
-    Promise.all([
-      fetch(LIVE_URL).then((r) => r.json()),
-      fetch(LOG_URL).then((r) => r.json()),
-    ])
-      .then(([rows, log]) => {
-        if (rows.length > 0) {
-          const hdrs = Object.keys(rows[0]);
-          setHeaders(hdrs);
-          setColMap(detectColumns(hdrs));
-          setData(rows);
-        }
-        setLogLines(log);
-        setLastUpdate(new Date().toLocaleTimeString());
-        setLoading(false);
-        setError(null);
-      })
-      .catch((err) => {
-        setError(err.message + " — is serial_listener.py running?");
-        setLoading(false);
-      });
-  }
+function IRHeatmap({ frame, min, max }) {
+  const canvasRef = useRef(null);
 
   useEffect(() => {
-    if (LIVE_MODE) {
-      fetchLive();
-      intervalRef.current = setInterval(fetchLive, LIVE_INTERVAL_MS);
-    } else {
-      loadExcel();
+    if (!frame || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const W = 32, H = 24;
+    const cw = canvas.width / W;
+    const ch = canvas.height / H;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const val  = frame[y * W + x];
+        const norm = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
+        const r = Math.round(255 * Math.min(1, norm * 2));
+        const g = Math.round(255 * Math.min(1, norm < 0.5 ? norm * 2 : (1 - norm) * 2));
+        const b = Math.round(255 * Math.max(0, 1 - norm * 2));
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x * cw, y * ch, cw, ch);
+      }
     }
-    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [frame, min, max]);
+
+  if (!frame) {
+    return (
+      <div className="img-placeholder">
+        <span>🔥 Waiting for IR data…</span>
+        <p>Thermal frame will appear after the first complete IR transfer</p>
+      </div>
+    );
+  }
+  return (
+    <div className="ir-wrap">
+      <canvas ref={canvasRef} width={320} height={240} className="ir-canvas" />
+      <div className="ir-legend">
+        <span style={{ color: "#4fc3f7" }}>{min?.toFixed(1)}°C</span>
+        <div className="ir-gradient" />
+        <span style={{ color: "#ff6b6b" }}>{max?.toFixed(1)}°C</span>
+      </div>
+    </div>
+  );
+}
+
+// Small canvas used inside gallery grid thumbnails
+function IRThumbnail({ frame, min, max }) {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    if (!frame || !canvasRef.current) return;
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    const W = 32, H = 24;
+    const cw = canvas.width / W;
+    const ch = canvas.height / H;
+    for (let y = 0; y < H; y++) {
+      for (let x = 0; x < W; x++) {
+        const val  = frame[y * W + x];
+        const norm = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
+        const r = Math.round(255 * Math.min(1, norm * 2));
+        const g = Math.round(255 * Math.min(1, norm < 0.5 ? norm * 2 : (1 - norm) * 2));
+        const b = Math.round(255 * Math.max(0, 1 - norm * 2));
+        ctx.fillStyle = `rgb(${r},${g},${b})`;
+        ctx.fillRect(x * cw, y * ch, cw, ch);
+      }
+    }
+  }, [frame, min, max]);
+  return <canvas ref={canvasRef} width={128} height={96}
+    style={{ width: "100%", height: "100%", display: "block", imageRendering: "pixelated" }} />;
+}
+
+export default function App() {
+  const historyRef   = useRef([]);
+  const [chartData,  setChartData]  = useState([]);
+  const [gallery,    setGallery]    = useState([]);   // all session images
+  const [selected,   setSelected]   = useState(null); // enlarged image index
+  const [ir,         setIR]         = useState(null); // latest IR frame
+  const [irGallery,  setIRGallery]  = useState([]);   // all IR frames this session
+  const [selectedIR, setSelectedIR] = useState(null); // enlarged IR index
+  const [log,        setLog]        = useState([]);
+  const [status,     setStatus]     = useState(null);
+  const [activeTab,  setActiveTab]  = useState("sensors");
+  const [paused,     setPaused]     = useState(false);
+  const [cmdStatus,  setCmdStatus]  = useState(null);
+
+  const sendCommand = useCallback(async (cmd) => {
+    setCmdStatus("sending");
+    try {
+      const r    = await fetch(`${API}/${cmd}`, { method: "POST" });
+      const data = await r.json();
+      setCmdStatus(data.ok ? "ok" : "error");
+    } catch {
+      setCmdStatus("error");
+    }
+    setTimeout(() => setCmdStatus(null), 2500);
   }, []);
 
-  const latest = data[data.length - 1];
-  const xKey   = colMap["timestamp"];
-  const maxAlt = colMap["altitude"] && data.length
-    ? Math.max(...data.map((r) => r[colMap["altitude"]] ?? 0)).toFixed(1)
+  const fetchHistory = useCallback(async () => {
+    try {
+      const r = await fetch(`${API}/sensor-history`);
+      const incoming = await r.json();
+      if (!Array.isArray(incoming)) return;
+      const prev = historyRef.current;
+      if (incoming.length > prev.length) {
+        const merged = incoming.map((r, i) => ({ ...r, idx: i + 1 }));
+        historyRef.current = merged;
+        setChartData([...merged]);
+      }
+    } catch { }
+  }, []);
+
+  const fetchGallery = useCallback(async () => {
+    try {
+      const r    = await fetch(`${API}/images-gallery`);
+      const data = await r.json();
+      if (Array.isArray(data)) setGallery(data);
+    } catch { }
+  }, []);
+
+  const fetchIR = useCallback(async () => {
+    try {
+      const r    = await fetch(`${API}/ir`);
+      const data = await r.json();
+      if (data.frame) setIR(data);
+    } catch { }
+  }, []);
+
+  const fetchIRGallery = useCallback(async () => {
+    try {
+      const r    = await fetch(`${API}/ir-gallery`);
+      const data = await r.json();
+      if (Array.isArray(data)) setIRGallery(data);
+    } catch { }
+  }, []);
+
+  const fetchLog = useCallback(async () => {
+    try {
+      const r    = await fetch(`${API}/log`);
+      const data = await r.json();
+      setLog(data.slice(-80));
+    } catch { }
+  }, []);
+
+  const fetchStatus = useCallback(async () => {
+    try {
+      const r    = await fetch(`${API}/status`);
+      const data = await r.json();
+      setStatus(data);
+    } catch { }
+  }, []);
+
+  useEffect(() => {
+    if (paused) return;
+    const poll = () => { fetchHistory(); fetchGallery(); fetchIR(); fetchIRGallery(); fetchLog(); fetchStatus(); };
+    poll();
+    const id = setInterval(poll, POLL_MS);
+    return () => clearInterval(id);
+  }, [paused, fetchHistory, fetchGallery, fetchIR, fetchIRGallery, fetchLog, fetchStatus]);
+
+  const latest = chartData[chartData.length - 1] ?? {};
+  const maxAlt = chartData.length
+    ? Math.max(...chartData.map((r) => r.alt ?? 0)).toFixed(1)
     : null;
 
-  if (loading) return (
-    <div className="status-msg">
-      {LIVE_MODE ? "Waiting for live data from serial_listener.py..." : "Loading flight data..."}
-    </div>
+  const margin = { top: 8, right: 16, left: 0, bottom: 4 };
+  const XAx = () => (
+    <XAxis dataKey="idx" tick={{ fill: C.muted, fontSize: 11 }}
+      label={{ value: "Reading #", position: "insideBottomRight", offset: -4, fill: C.muted, fontSize: 11 }} />
   );
-
-  if (error) return (
-    <div className="status-msg error">
-      {error}<br />
-      {LIVE_MODE
-        ? <small>Run: python3 serial_listener.py --port /dev/cu.usbmodem101</small>
-        : <small>Make sure balloon_flight_data.xlsx is inside the public/ folder.</small>}
-    </div>
-  );
-
-  // Charts content — same as before, extracted for layout clarity
-  const charts = (
-    <>
-      <ColMapPanel colMap={colMap} headers={headers} />
-
-      <div className="cards">
-        <StatCard label="Max Altitude"   value={maxAlt}                                                           unit="m"    color={COLORS.altitude} />
-        <StatCard label="Temperature"    value={colMap["temperature"] ? latest?.[colMap["temperature"]] : null}   unit="°C"   color={COLORS.temperature} />
-        <StatCard label="Pressure"       value={colMap["pressure"]    ? latest?.[colMap["pressure"]]    : null}   unit="hPa"  color={COLORS.pressure} />
-        <StatCard label="Humidity"       value={colMap["humidity"]    ? latest?.[colMap["humidity"]]    : null}   unit="%"    color={COLORS.humidity} />
-        <StatCard label="Satellites"     value={colMap["satellites"]  ? latest?.[colMap["satellites"]]  : null}   unit="sats" color="#888" />
-        <StatCard label="Total Readings" value={data.length}                                                      unit="rows" color="#888" />
-      </div>
-
-      {colMap["altitude"]
-        ? <SensorLine data={data} xKey={xKey} title="Altitude over Time" height={260}
-            lines={[{ key: colMap["altitude"], label: "Altitude (m)", color: COLORS.altitude }]} />
-        : <MissingChart title="Altitude over Time" />}
-
-      <div className="charts-grid">
-        {colMap["temperature"]
-          ? <SensorLine data={data} xKey={xKey} title="Temperature (°C)"
-              lines={[{ key: colMap["temperature"], label: "Temp (°C)", color: COLORS.temperature }]} />
-          : <MissingChart title="Temperature" />}
-        {colMap["pressure"]
-          ? <SensorLine data={data} xKey={xKey} title="Pressure (hPa)"
-              lines={[{ key: colMap["pressure"], label: "Pressure", color: COLORS.pressure }]} />
-          : <MissingChart title="Pressure" />}
-      </div>
-
-      <div className="charts-grid">
-        <PressureAltScatter data={data} colMap={colMap} />
-        {colMap["altitude"] && colMap["gps_altitude"]
-          ? <SensorLine data={data} xKey={xKey} title="GPS Altitude vs Barometric Altitude"
-              lines={[
-                { key: colMap["altitude"],     label: "Barometric Alt", color: COLORS.altitude },
-                { key: colMap["gps_altitude"], label: "GPS Alt",        color: COLORS.gpsAlt },
-              ]} />
-          : <MissingChart title="GPS Altitude vs Barometric Altitude" />}
-      </div>
-
-      <GPSPath data={data} colMap={colMap} />
-
-      <div className="charts-grid">
-        {colMap["accel_x"] && colMap["accel_y"] && colMap["accel_z"]
-          ? <SensorLine data={data} xKey={xKey} title="Motion Sensor (X / Y / Z)"
-              lines={[
-                { key: colMap["accel_x"], label: "X", color: COLORS.x },
-                { key: colMap["accel_y"], label: "Y", color: COLORS.y },
-                { key: colMap["accel_z"], label: "Z", color: COLORS.z },
-              ]} />
-          : <MissingChart title="Motion Sensor" />}
-        {colMap["humidity"]
-          ? <SensorLine data={data} xKey={xKey} title="Humidity (%)"
-              lines={[{ key: colMap["humidity"], label: "Humidity", color: COLORS.humidity }]} />
-          : <MissingChart title="Humidity" />}
-      </div>
-    </>
+  const YAx = ({ unit, width = 52 }) => (
+    <YAxis tick={{ fill: C.muted, fontSize: 11 }}
+      tickFormatter={(v) => `${v}${unit}`} width={width} />
   );
 
   return (
     <div className="app">
-      <div className="header">
-        <div>
-          <h1>Balloon Flight Dashboard</h1>
-          <p className="subtitle">
-            {data.length} readings
-            {latest?.[xKey] ? ` · ${latest[xKey].toString().slice(0, 10)}` : ""}
-          </p>
+
+      {/* Header */}
+      <header className="header">
+        <div className="header-left">
+          <span className="header-title">🛸 CubeSat Ground Station</span>
+          <span className={`status-dot ${status?.ok ? "online" : "offline"}`} />
+          <span className="status-text">
+            {status?.ok
+              ? `${chartData.length} reading${chartData.length !== 1 ? "s" : ""} · ${status.image_count ?? 0} image${status.image_count !== 1 ? "s" : ""}`
+              : "Connecting…"}
+          </span>
         </div>
-        <div className="badge" style={{ background: LIVE_MODE ? "#1d9e75" : "#555" }}>
-          {LIVE_MODE ? `Live · Updated ${lastUpdate ?? "..."}` : "Static · From Excel"}
+        <div className="header-right">
+          {cmdStatus && (
+            <span className={`cmd-feedback ${cmdStatus}`}>
+              {cmdStatus === "sending" ? "Sending…" : cmdStatus === "ok" ? "✓ Sent" : "✗ Failed"}
+            </span>
+          )}
+          <button className="cmd-btn start" onClick={() => sendCommand("start")}
+            disabled={cmdStatus === "sending"}>
+            ▶ Start
+          </button>
+          <button className="cmd-btn stop" onClick={() => sendCommand("stop")}
+            disabled={cmdStatus === "sending"}>
+            ■ Stop
+          </button>
+          <button className={`pill-btn ${paused ? "active" : ""}`} onClick={() => setPaused(p => !p)}>
+            {paused ? "⏸ Paused" : "⏸ Pause"}
+          </button>
         </div>
+      </header>
+
+      {/* Stat cards */}
+      <div className="stat-row">
+        <StatCard label="Temperature"  value={latest.temp?.toFixed(1)}  unit="°C"   color={C.temp} />
+        <StatCard label="Pressure"     value={latest.pres?.toFixed(1)}  unit="hPa"  color={C.pres} />
+        <StatCard label="Humidity"     value={latest.hum?.toFixed(1)}   unit="%"    color={C.hum} />
+        <StatCard label="Altitude"     value={latest.alt?.toFixed(0)}   unit="m"    color={C.alt} />
+        <StatCard label="Max Altitude" value={maxAlt}                    unit="m"    color="#f9ca24" />
+        <StatCard label="GPS Sats"     value={latest.sats}              unit="sats" color={C.gpsAlt} />
       </div>
 
-      {/* Side-by-side layout in live mode, full-width in static mode */}
-      {LIVE_MODE ? (
-        <div className="live-layout">
-          <div className="live-charts">{charts}</div>
-          <PacketLog logLines={logLines} />
+      {/* Tabs */}
+      <div className="tab-bar">
+        {[
+          ["sensors", "📊 Sensors"],
+          ["images",  `📸 Images${gallery.length ? ` (${gallery.length})` : ""}`],
+          ["log",     "📋 Log"],
+        ].map(([id, label]) => (
+          <button key={id}
+            className={`tab-btn ${activeTab === id ? "active" : ""}`}
+            onClick={() => setActiveTab(id)}>
+            {label}
+            {id === "images" && gallery.length > 0 && activeTab !== "images" && (
+              <span className="tab-badge" />
+            )}
+          </button>
+        ))}
+      </div>
+
+      {/* ── Sensors tab ── */}
+      {activeTab === "sensors" && (
+        <div className="tab-content">
+          {chartData.length === 0 ? (
+            <div className="empty-state">Waiting for sensor data…</div>
+          ) : (<>
+            <div className="chart-block">
+              <h3 className="chart-title">Temperature <span>(°C)</span></h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={chartData} margin={margin}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAx /><YAx unit="°" />
+                  <Tooltip content={<ChartTip />} />
+                  <Line dataKey="temp" name="Temp °C" stroke={C.temp} dot={{ r: 3 }} strokeWidth={2} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="chart-block">
+              <h3 className="chart-title">Pressure <span>(hPa)</span> &amp; Humidity <span>(%)</span></h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={chartData} margin={margin}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAx /><YAx unit="" />
+                  <Tooltip content={<ChartTip />} />
+                  <Legend wrapperStyle={{ color: C.muted, fontSize: 12 }} />
+                  <Line dataKey="pres" name="Pressure hPa" stroke={C.pres} dot={{ r: 3 }} strokeWidth={2} isAnimationActive={false} />
+                  <Line dataKey="hum"  name="Humidity %"   stroke={C.hum}  dot={{ r: 3 }} strokeWidth={2} isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="chart-block">
+              <h3 className="chart-title">Altitude <span>Barometric vs GPS (m)</span></h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <LineChart data={chartData} margin={margin}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAx /><YAx unit="m" />
+                  <Tooltip content={<ChartTip />} />
+                  <Legend wrapperStyle={{ color: C.muted, fontSize: 12 }} />
+                  <Line dataKey="alt"    name="Baro Alt m" stroke={C.alt}    dot={{ r: 3 }} strokeWidth={2} isAnimationActive={false} />
+                  <Line dataKey="gpsAlt" name="GPS Alt m"  stroke={C.gpsAlt} dot={{ r: 3 }} strokeWidth={2} strokeDasharray="5 3" isAnimationActive={false} />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="chart-block">
+              <h3 className="chart-title">Temperature vs Altitude <span>(scatter)</span></h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <ScatterChart margin={margin}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="alt"  name="Altitude" unit="m"  tick={{ fill: C.muted, fontSize: 11 }} label={{ value: "Altitude (m)", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11 }} />
+                  <YAxis dataKey="temp" name="Temp"     unit="°C" tick={{ fill: C.muted, fontSize: 11 }} width={52} />
+                  <Tooltip cursor={{ strokeDasharray: "3 3" }} content={<ChartTip />} />
+                  <Scatter data={chartData} fill={C.temp} opacity={0.8} />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+
+            <div className="chart-block">
+              <h3 className="chart-title">Pressure vs Altitude <span>(scatter)</span></h3>
+              <ResponsiveContainer width="100%" height={220}>
+                <ScatterChart margin={margin}>
+                  <CartesianGrid strokeDasharray="3 3" stroke={C.border} />
+                  <XAxis dataKey="alt"  name="Altitude" unit="m"   tick={{ fill: C.muted, fontSize: 11 }} label={{ value: "Altitude (m)", position: "insideBottom", offset: -2, fill: C.muted, fontSize: 11 }} />
+                  <YAxis dataKey="pres" name="Pressure" unit="hPa" tick={{ fill: C.muted, fontSize: 11 }} width={56} />
+                  <Tooltip cursor={{ strokeDasharray: "3 3" }} content={<ChartTip />} />
+                  <Scatter data={chartData} fill={C.pres} opacity={0.8} />
+                </ScatterChart>
+              </ResponsiveContainer>
+            </div>
+          </>)}
         </div>
-      ) : (
-        charts
+      )}
+
+      {/* ── Images tab ── */}
+      {activeTab === "images" && (
+        <div className="tab-content">
+
+          {/* Lightbox overlay */}
+          {selected !== null && gallery[selected] && (
+            <div className="lightbox" onClick={() => setSelected(null)}>
+              <div className="lightbox-inner" onClick={e => e.stopPropagation()}>
+                <div className="lightbox-header">
+                  <span>
+                    📸 Image {gallery.length - selected} of {gallery.length}
+                    &nbsp;·&nbsp;
+                    {new Date(gallery[selected].timestamp * 1000).toLocaleTimeString()}
+                    &nbsp;·&nbsp;
+                    {(gallery[selected].size_bytes / 1024).toFixed(1)} KB
+                  </span>
+                  <button className="lightbox-close" onClick={() => setSelected(null)}>✕</button>
+                </div>
+                <img src={gallery[selected].image} alt="CubeSat capture" className="lightbox-img" />
+                <div className="lightbox-nav">
+                  <button
+                    className="nav-btn"
+                    disabled={selected >= gallery.length - 1}
+                    onClick={() => setSelected(s => s + 1)}>
+                    ← Older
+                  </button>
+                  <span className="nav-label">
+                    {new Date(gallery[selected].timestamp * 1000).toLocaleString()}
+                  </span>
+                  <button
+                    className="nav-btn"
+                    disabled={selected <= 0}
+                    onClick={() => setSelected(s => s - 1)}>
+                    Newer →
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {gallery.length === 0 ? (
+            <div className="empty-state">
+              <p>📡 Waiting for first image…</p>
+              <p className="empty-sub">Images appear here as the receiver assembles packets each cycle</p>
+            </div>
+          ) : (
+            <>
+              <div className="gallery-header">
+                <span>{gallery.length} image{gallery.length !== 1 ? "s" : ""} this session</span>
+                <span className="gallery-sub">Click any image to enlarge · newest first</span>
+              </div>
+              <div className="gallery-grid">
+                {gallery.map((img, i) => (
+                  <div key={i} className={`gallery-thumb ${i === 0 ? "latest" : ""}`}
+                    onClick={() => setSelected(i)}>
+                    <img src={img.image} alt={`Capture ${gallery.length - i}`} />
+                    <div className="thumb-overlay">
+                      <span className="thumb-num">#{gallery.length - i}</span>
+                      <span className="thumb-time">
+                        {new Date(img.timestamp * 1000).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {i === 0 && <span className="latest-badge">LATEST</span>}
+                  </div>
+                ))}
+              </div>
+            </>
+          )}
+
+          {/* ── IR gallery ── */}
+          <div style={{ marginBottom: 16 }}>
+            <div className="gallery-header">
+              <span>🔥 Thermal IR — {irGallery.length} frame{irGallery.length !== 1 ? "s" : ""} this session</span>
+              <span className="gallery-sub">Click any frame to enlarge · newest first</span>
+            </div>
+
+            {/* IR lightbox */}
+            {selectedIR !== null && irGallery[selectedIR] && (
+              <div className="lightbox" onClick={() => setSelectedIR(null)}>
+                <div className="lightbox-inner" onClick={e => e.stopPropagation()}>
+                  <div className="lightbox-header">
+                    <span>
+                      🔥 Frame {irGallery.length - selectedIR} of {irGallery.length}
+                      &nbsp;·&nbsp;
+                      {new Date(irGallery[selectedIR].timestamp * 1000).toLocaleTimeString()}
+                      &nbsp;·&nbsp;
+                      {irGallery[selectedIR].min?.toFixed(1)}°C – {irGallery[selectedIR].max?.toFixed(1)}°C
+                    </span>
+                    <button className="lightbox-close" onClick={() => setSelectedIR(null)}>✕</button>
+                  </div>
+                  <div style={{ background: "#060a14", padding: 20, display: "flex", justifyContent: "center" }}>
+                    <IRHeatmap
+                      frame={irGallery[selectedIR].frame}
+                      min={irGallery[selectedIR].min}
+                      max={irGallery[selectedIR].max}
+                    />
+                  </div>
+                  <div className="lightbox-nav">
+                    <button className="nav-btn"
+                      disabled={selectedIR >= irGallery.length - 1}
+                      onClick={() => setSelectedIR(s => s + 1)}>← Older</button>
+                    <span className="nav-label">
+                      {new Date(irGallery[selectedIR].timestamp * 1000).toLocaleString()}
+                    </span>
+                    <button className="nav-btn"
+                      disabled={selectedIR <= 0}
+                      onClick={() => setSelectedIR(s => s - 1)}>Newer →</button>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {irGallery.length === 0 ? (
+              <div className="image-panel">
+                <div className="image-frame">
+                  <div className="img-placeholder">
+                    <span>🔥 Waiting for IR data…</span>
+                    <p>Thermal frames appear here after each cycle</p>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <div className="gallery-grid">
+                {irGallery.map((frame, i) => (
+                  <div key={i}
+                    className={`gallery-thumb ir-thumb ${i === 0 ? "latest" : ""}`}
+                    onClick={() => setSelectedIR(i)}>
+                    <IRThumbnail frame={frame.frame} min={frame.min} max={frame.max} />
+                    <div className="thumb-overlay">
+                      <span className="thumb-num">#{irGallery.length - i}</span>
+                      <span className="thumb-time">
+                        {new Date(frame.timestamp * 1000).toLocaleTimeString()}
+                      </span>
+                    </div>
+                    {i === 0 && <span className="latest-badge">LATEST</span>}
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
+          {/* GPS bar under gallery */}
+          {latest.lat != null && (
+            <div className="gps-bar">
+              <span>🛰 GPS:</span>
+              <span className="gps-val">{latest.lat.toFixed(6)}, {latest.lon.toFixed(6)}</span>
+              <span className="gps-sep">·</span>
+              <span className="gps-val">{latest.gpsAlt?.toFixed(0)} m MSL</span>
+              <span className="gps-sep">·</span>
+              <span className="gps-val">{latest.sats} sats</span>
+              <span className={`gps-fix ${latest.gpsValid ? "valid" : "invalid"}`}>
+                {latest.gpsValid ? "✓ Fix" : "✗ No fix"}
+              </span>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── Log tab ── */}
+      {activeTab === "log" && (
+        <div className="tab-content">
+          <div className="log-panel">
+            {log.length === 0 ? (
+              <div className="log-empty">No serial output yet…</div>
+            ) : (
+              [...log].reverse().map((entry, i) => (
+                <div key={i} className={`log-line ${classifyLog(entry.msg)}`}>
+                  <span className="log-time">{new Date(entry.t * 1000).toLocaleTimeString()}</span>
+                  <span className="log-msg">{entry.msg}</span>
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       )}
     </div>
   );
+}
+
+function classifyLog(msg) {
+  if (msg.startsWith("✅") || msg.startsWith("🎉")) return "log-ok";
+  if (msg.startsWith("❌") || msg.startsWith("⚠"))  return "log-err";
+  if (msg.startsWith("📥") || msg.startsWith("📡")) return "log-data";
+  if (msg.startsWith("🔄"))                          return "log-resend";
+  return "";
 }

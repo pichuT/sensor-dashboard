@@ -77,6 +77,22 @@ npm run dev
 ```
 4. Open [http://localhost:5173](http://localhost:5173)
 
+## Finding Your Serial Port
+ 
+The serial port name is unique to your computer and changes depending on which USB port you plug into and the order devices are connected. You need to check it every time before running in live mode.
+ 
+**On Mac:**
+```bash
+ls /dev/cu.*
+```
+Look for something like `/dev/cu.usbmodem101` or `/dev/cu.usbmodem1101`.
+ 
+**On Windows:**
+Open Device Manager and look under "Ports (COM & LPT)" for something like `COM3` or `COM4`.
+ 
+> The port name is specific to your machine — it will be different on every computer and can change between sessions on the same computer even if you're using the same board. Always run the command above to check before starting.
+
+
 ## Running the Dashboard (Live Mode)
 
 You need three terminals running simultaneously.
