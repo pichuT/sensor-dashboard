@@ -39,6 +39,9 @@ session_images = []          # ALL images received this session: [{timestamp, b6
 latest_ir = []               # list of 768 floats (32x24 IR grid) — most recent frame
 ir_gallery = []              # ALL IR frames this session: [{timestamp, frame, min, max}]
 log_lines = deque(maxlen=200)
+# Tracks which filename maps to which gallery index, so we can update in-place after ARQ resends
+_img_file_index = {}   # filename -> index in session_images
+_ir_file_index  = {}   # filename -> index in ir_gallery
 
 state_lock = threading.Lock()
 serial_ref = {"port": None}   # holds the live Serial object so routes can write to it
@@ -57,8 +60,7 @@ def parse_serial(port: str, baud: int = 115200):
         ser = serial.Serial(port, baud, timeout=1)
     except serial.SerialException as e:
         print(f"[serial] ERROR: {e}")
-        print("[serial] Running in DEMO mode — sending simulated data every 10s")
-        _demo_mode()
+        print("[serial] Could not open serial port. Exiting.")
         return
 
     print(f"[serial] Connected to {port}")
@@ -101,6 +103,7 @@ def parse_serial(port: str, baud: int = 115200):
                     "image": f"data:image/jpeg;base64,{b64}",
                     "size_bytes": len(img_bytes),
                     "index": len(session_images),  # 0-based position in gallery
+                    "version": 1,
                 }
                 with state_lock:
                     latest_image_bytes = img_bytes
@@ -136,6 +139,64 @@ def parse_serial(port: str, baud: int = 115200):
                 log_lines.append({"t": time.time(), "msg": line})
             # Also print to terminal for debugging
             print(f"[recv] {line}")
+
+            # ── Track saved filenames so we can reload after ARQ ──────────
+            # Line format from receiver: ✅ FILE SAVED: /img_847666.jpg
+            if "FILE SAVED:" in line:
+                fname = line.split("FILE SAVED:")[-1].strip()
+                with state_lock:
+                    if fname.endswith(".jpg") or fname.endswith(".jpeg"):
+                        idx = len(session_images) - 1
+                        if idx >= 0:
+                            _img_file_index[fname] = idx
+                            print(f"[serial] 🗂 Tracked img file: {fname} → gallery[{idx}]")
+                    elif fname.endswith(".bin"):
+                        idx = len(ir_gallery) - 1
+                        if idx >= 0:
+                            _ir_file_index[fname] = idx
+                            print(f"[serial] 🗂 Tracked IR file: {fname} → ir_gallery[{idx}]")
+
+            # ── Reload image/IR after ARQ resend phase completes ──────────
+            # Line format: 🎉 IMAGE file is now COMPLETE!  or  🎉 IR file is now COMPLETE!
+            elif "IMAGE file is now COMPLETE" in line:
+                with state_lock:
+                    # Find the most recently tracked jpg and reload it from disk
+                    if _img_file_index:
+                        fname = max(_img_file_index, key=_img_file_index.get)
+                        idx   = _img_file_index[fname]
+                        try:
+                            with open(fname, "rb") as f:
+                                img_bytes = f.read()
+                            b64 = base64.b64encode(img_bytes).decode("utf-8")
+                            session_images[idx]["image"]      = f"data:image/jpeg;base64,{b64}"
+                            session_images[idx]["size_bytes"] = len(img_bytes)
+                            session_images[idx]["version"]    = session_images[idx].get("version", 1) + 1
+                            latest_image_bytes = img_bytes
+                            print(f"[serial] 🔄 Reloaded image after ARQ: {fname} ({len(img_bytes)} bytes, v{session_images[idx]['version']})")
+                        except Exception as e:
+                            print(f"[serial] ⚠ Could not reload image {fname}: {e}")
+
+            elif "IR file is now COMPLETE" in line:
+                with state_lock:
+                    if _ir_file_index:
+                        fname = max(_ir_file_index, key=_ir_file_index.get)
+                        idx   = _ir_file_index[fname]
+                        try:
+                            with open(fname, "rb") as f:
+                                raw = f.read()
+                            # IR bin is stored as raw IEEE-754 floats (4 bytes each)
+                            import struct
+                            count    = len(raw) // 4
+                            ir_data  = list(struct.unpack(f"{count}f", raw[:count * 4]))
+                            mn, mx   = min(ir_data), max(ir_data)
+                            ir_gallery[idx]["frame"]   = ir_data
+                            ir_gallery[idx]["min"]     = mn
+                            ir_gallery[idx]["max"]     = mx
+                            ir_gallery[idx]["version"] = ir_gallery[idx].get("version", 1) + 1
+                            latest_ir[:] = ir_data
+                            print(f"[serial] 🔄 Reloaded IR after ARQ: {fname} ({count} values, v{ir_gallery[idx]['version']})")
+                        except Exception as e:
+                            print(f"[serial] ⚠ Could not reload IR {fname}: {e}")
 
 
 def _demo_mode():
@@ -261,8 +322,8 @@ def get_image():
 def get_images_gallery():
     """
     Returns ALL images captured this session as an array, newest first.
-    Each entry: { index, timestamp, image (data URI), size_bytes }
-    The dashboard uses this to show a browsable photo gallery.
+    Each entry: { index, timestamp, image (data URI), size_bytes, version }
+    version increments each time an image is reloaded after ARQ resends complete.
     """
     with state_lock:
         return jsonify(list(reversed(session_images)))

@@ -4,9 +4,20 @@ import {
   XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Legend,
 } from "recharts";
+import { MapContainer, TileLayer, Polyline, Marker, Popup, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
+import L from "leaflet";
 import "./App.css";
 
-const API = "http://localhost:5000/api";
+// Fix leaflet default marker icons (broken in Vite/webpack by default)
+delete L.Icon.Default.prototype._getIconUrl;
+L.Icon.Default.mergeOptions({
+  iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
+  iconUrl:       "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon.png",
+  shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
+});
+
+const API     = "http://localhost:5000/api";
 const POLL_MS = 5000;
 
 const C = {
@@ -18,6 +29,15 @@ const C = {
   border: "#1e293b",
   muted:  "#64748b",
 };
+
+// Re-centers the map when the latest GPS point changes
+function MapUpdater({ center }) {
+  const map = useMap();
+  useEffect(() => {
+    if (center) map.setView(center, map.getZoom());
+  }, [center, map]);
+  return null;
+}
 
 function StatCard({ label, value, unit, color }) {
   return (
@@ -85,7 +105,6 @@ function IRHeatmap({ frame, min, max }) {
   );
 }
 
-// Small canvas used inside gallery grid thumbnails
 function IRThumbnail({ frame, min, max }) {
   const canvasRef = useRef(null);
   useEffect(() => {
@@ -114,16 +133,17 @@ function IRThumbnail({ frame, min, max }) {
 export default function App() {
   const historyRef   = useRef([]);
   const [chartData,  setChartData]  = useState([]);
-  const [gallery,    setGallery]    = useState([]);   // all session images
-  const [selected,   setSelected]   = useState(null); // enlarged image index
-  const [ir,         setIR]         = useState(null); // latest IR frame
-  const [irGallery,  setIRGallery]  = useState([]);   // all IR frames this session
-  const [selectedIR, setSelectedIR] = useState(null); // enlarged IR index
+  const [gallery,    setGallery]    = useState([]);
+  const [selected,   setSelected]   = useState(null);
+  const [ir,         setIR]         = useState(null);
+  const [irGallery,  setIRGallery]  = useState([]);
+  const [selectedIR, setSelectedIR] = useState(null);
   const [log,        setLog]        = useState([]);
   const [status,     setStatus]     = useState(null);
   const [activeTab,  setActiveTab]  = useState("sensors");
   const [paused,     setPaused]     = useState(false);
   const [cmdStatus,  setCmdStatus]  = useState(null);
+  const [mapLayer,   setMapLayer]   = useState("street"); // "street" | "satellite"
 
   const sendCommand = useCallback(async (cmd) => {
     setCmdStatus("sending");
@@ -204,6 +224,12 @@ export default function App() {
     ? Math.max(...chartData.map((r) => r.alt ?? 0)).toFixed(1)
     : null;
 
+  // GPS track points using LoRa-stamped coordinates
+  const gpsPoints = chartData
+    .filter(r => r.loraLat && r.loraLon && (r.loraLat !== 0 || r.loraLon !== 0))
+    .map(r => [r.loraLat, r.loraLon]);
+  const lastGPS = gpsPoints[gpsPoints.length - 1] ?? null;
+
   const margin = { top: 8, right: 16, left: 0, bottom: 4 };
   const XAx = () => (
     <XAxis dataKey="idx" tick={{ fill: C.muted, fontSize: 11 }}
@@ -263,6 +289,7 @@ export default function App() {
         {[
           ["sensors", "📊 Sensors"],
           ["images",  `📸 Images${gallery.length ? ` (${gallery.length})` : ""}`],
+          ["gps",     "🗺 GPS Track"],
           ["log",     "📋 Log"],
         ].map(([id, label]) => (
           <button key={id}
@@ -404,7 +431,7 @@ export default function App() {
               </div>
               <div className="gallery-grid">
                 {gallery.map((img, i) => (
-                  <div key={i} className={`gallery-thumb ${i === 0 ? "latest" : ""}`}
+                  <div key={`${i}-v${img.version ?? 1}`} className={`gallery-thumb ${i === 0 ? "latest" : ""}`}
                     onClick={() => setSelected(i)}>
                     <img src={img.image} alt={`Capture ${gallery.length - i}`} />
                     <div className="thumb-overlay">
@@ -475,7 +502,7 @@ export default function App() {
             ) : (
               <div className="gallery-grid">
                 {irGallery.map((frame, i) => (
-                  <div key={i}
+                  <div key={`${i}-v${frame.version ?? 1}`}
                     className={`gallery-thumb ir-thumb ${i === 0 ? "latest" : ""}`}
                     onClick={() => setSelectedIR(i)}>
                     <IRThumbnail frame={frame.frame} min={frame.min} max={frame.max} />
@@ -492,19 +519,117 @@ export default function App() {
             )}
           </div>
 
-          {/* GPS bar under gallery */}
-          {latest.lat != null && (
-            <div className="gps-bar">
-              <span>🛰 GPS:</span>
-              <span className="gps-val">{latest.lat.toFixed(6)}, {latest.lon.toFixed(6)}</span>
-              <span className="gps-sep">·</span>
-              <span className="gps-val">{latest.gpsAlt?.toFixed(0)} m MSL</span>
-              <span className="gps-sep">·</span>
-              <span className="gps-val">{latest.sats} sats</span>
-              <span className={`gps-fix ${latest.gpsValid ? "valid" : "invalid"}`}>
-                {latest.gpsValid ? "✓ Fix" : "✗ No fix"}
-              </span>
+        </div>
+      )}
+
+      {/* ── GPS Track tab ── */}
+      {activeTab === "gps" && (
+        <div className="tab-content">
+          {gpsPoints.length === 0 ? (
+            <div className="empty-state">
+              <p>🛰 Waiting for GPS data…</p>
+              <p className="empty-sub">The flight track will appear here once the sender board gets a GPS fix outdoors</p>
             </div>
+          ) : (
+            <>
+              {/* Map layer toggle */}
+              <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
+                <button
+                  onClick={() => setMapLayer("street")}
+                  style={{
+                    padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                    background: mapLayer === "street" ? "#ffd93d" : "#1e293b",
+                    color: mapLayer === "street" ? "#0f172a" : "#94a3b8",
+                    border: "1px solid #334155", fontWeight: 600,
+                  }}>
+                  🗺 Street
+                </button>
+                <button
+                  onClick={() => setMapLayer("satellite")}
+                  style={{
+                    padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer",
+                    background: mapLayer === "satellite" ? "#ffd93d" : "#1e293b",
+                    color: mapLayer === "satellite" ? "#0f172a" : "#94a3b8",
+                    border: "1px solid #334155", fontWeight: 600,
+                  }}>
+                  🛰 Satellite
+                </button>
+              </div>
+
+              {/* Leaflet map */}
+              <div style={{ height: 460, borderRadius: 12, overflow: "hidden", border: "1px solid #1e293b", marginBottom: 24 }}>
+                <MapContainer
+                  center={lastGPS ?? [34.05, -118.24]}
+                  zoom={17}
+                  style={{ height: "100%", width: "100%" }}
+                >
+                  {mapLayer === "street" ? (
+                    <TileLayer
+                      url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                    />
+                  ) : (
+                    <TileLayer
+                      url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
+                      attribution='Tiles &copy; Esri &mdash; Source: Esri, USGS, NOAA'
+                    />
+                  )}
+                  <MapUpdater center={lastGPS} />
+                  {gpsPoints.length > 1 && (
+                    <Polyline positions={gpsPoints} color="#ffd93d" weight={3} opacity={0.9} />
+                  )}
+                  {lastGPS && (
+                    <Marker position={lastGPS}>
+                      <Popup>
+                        <strong>Latest CubeSat Position</strong><br />
+                        Lat: {lastGPS[0].toFixed(6)}<br />
+                        Lon: {lastGPS[1].toFixed(6)}<br />
+                        Baro Alt: {latest.alt?.toFixed(1)} m<br />
+                        Temp: {latest.temp?.toFixed(1)}°C
+                      </Popup>
+                    </Marker>
+                  )}
+                </MapContainer>
+              </div>
+
+              {/* GPS history table */}
+              <div className="chart-block">
+                <h3 className="chart-title">GPS History <span>({gpsPoints.length} points)</span></h3>
+                <div style={{ overflowX: "auto" }}>
+                  <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 12, color: "#cbd5e1" }}>
+                    <thead>
+                      <tr style={{ borderBottom: "1px solid #1e293b", color: C.muted, textAlign: "left" }}>
+                        <th style={{ padding: "8px 12px" }}>#</th>
+                        <th style={{ padding: "8px 12px" }}>Latitude</th>
+                        <th style={{ padding: "8px 12px" }}>Longitude</th>
+                        <th style={{ padding: "8px 12px" }}>Baro Alt (m)</th>
+                        <th style={{ padding: "8px 12px" }}>Temp (°C)</th>
+                        <th style={{ padding: "8px 12px" }}>Pressure (hPa)</th>
+                        <th style={{ padding: "8px 12px" }}>Humidity (%)</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {[...chartData].reverse().map((row, i) => {
+                        const lat = row.loraLat ?? row.lat;
+                        const lon = row.loraLon ?? row.lon;
+                        if (!lat || !lon || (lat === 0 && lon === 0)) return null;
+                        return (
+                          <tr key={i} style={{ borderBottom: "1px solid #0f172a" }}>
+                            <td style={{ padding: "7px 12px", color: C.muted }}>#{chartData.length - i}</td>
+                            <td style={{ padding: "7px 12px", color: "#ffd93d" }}>{lat.toFixed(6)}</td>
+                            <td style={{ padding: "7px 12px", color: "#ffd93d" }}>{lon.toFixed(6)}</td>
+                            <td style={{ padding: "7px 12px" }}>{row.alt?.toFixed(1)}</td>
+                            <td style={{ padding: "7px 12px", color: C.temp }}>{row.temp?.toFixed(1)}</td>
+                            <td style={{ padding: "7px 12px", color: C.pres }}>{row.pres?.toFixed(1)}</td>
+                            <td style={{ padding: "7px 12px", color: C.hum }}>{row.hum?.toFixed(1)}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </>
           )}
         </div>
       )}
