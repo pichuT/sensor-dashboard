@@ -1,14 +1,18 @@
+/* =========================================================================
+   Dark-theme design system for the React dashboard.
+   ========================================================================= */
+
 /* ── Reset & base ──────────────────────────────────────────────────────── */
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:      #0a0e1a;
-  --card:    #111827;
-  --border:  #1e293b;
-  --text:    #e2e8f0;
-  --muted:   #64748b;
-  --accent:  #38bdf8;
-  --radius:  8px;
+  --bg:      #0a0e1a;   /* page background */
+  --card:    #111827;   /* card/panel background */
+  --border:  #1e293b;   /* subtle border between elements */
+  --text:    #e2e8f0;   /* primary text */
+  --muted:   #64748b;   /* secondary/label text */
+  --accent:  #38bdf8;   /* sky-blue accent for active states */
+  --radius:  8px;       /* standard border-radius */
 }
 
 html, body, #root {
@@ -43,16 +47,18 @@ html, body, #root {
 .header-left  { display: flex; align-items: center; gap: 10px; }
 .header-title { font-size: 16px; font-weight: 700; letter-spacing: 0.03em; }
 
+/* Connection status indicator dot */
 .status-dot {
   width: 8px; height: 8px;
   border-radius: 50%;
   background: var(--muted);
 }
-.status-dot.online  { background: #22c55e; box-shadow: 0 0 6px #22c55e; }
+.status-dot.online  { background: #22c55e; box-shadow: 0 0 6px #22c55e; } /* glowing green */
 .status-dot.offline { background: #ef4444; }
 
 .status-text { color: var(--muted); font-size: 12px; }
 
+/* Pill-shaped toggle button (used for Pause) */
 .pill-btn {
   background: var(--card);
   border: 1px solid var(--border);
@@ -77,6 +83,7 @@ html, body, #root {
   margin-bottom: 20px;
 }
 
+/* Each card gets a coloured top border set inline from the chart colour palette */
 .stat-card {
   background: var(--card);
   border: 1px solid var(--border);
@@ -112,6 +119,7 @@ html, body, #root {
 .tab-btn:hover  { color: var(--text); }
 .tab-btn.active { color: var(--accent); border-bottom-color: var(--accent); }
 
+/* Small green dot badge shown on inactive tabs when new data arrives */
 .tab-badge {
   position: absolute;
   top: 6px; right: 8px;
@@ -133,6 +141,7 @@ html, body, #root {
 }
 
 /* ── Chart blocks ───────────────────────────────────────────────────────── */
+/* Wrapper card for each Recharts chart */
 .chart-block {
   background: var(--card);
   border: 1px solid var(--border);
@@ -147,9 +156,10 @@ html, body, #root {
   color: var(--text);
   margin-bottom: 12px;
 }
-.chart-title span { color: var(--muted); font-weight: 400; }
+.chart-title span { color: var(--muted); font-weight: 400; } /* unit label */
 
 /* ── Tooltip ────────────────────────────────────────────────────────────── */
+/* Custom Recharts tooltip card */
 .chart-tip {
   background: #1e293b;
   border: 1px solid var(--border);
@@ -160,6 +170,7 @@ html, body, #root {
 }
 
 /* ── Image grid ─────────────────────────────────────────────────────────── */
+/* Two-column layout for the camera + IR panels in live view */
 .image-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -192,6 +203,7 @@ html, body, #root {
   font-size: 11px;
 }
 
+/* Dark letterbox container for camera images */
 .image-frame {
   display: flex;
   align-items: center;
@@ -207,6 +219,7 @@ html, body, #root {
   display: block;
 }
 
+/* Shown before first image arrives */
 .img-placeholder {
   text-align: center;
   color: var(--muted);
@@ -234,12 +247,14 @@ html, body, #root {
   gap: 8px;
 }
 
+/* pixelated rendering preserves the blocky thermal grid look */
 .ir-canvas {
   border-radius: 4px;
   image-rendering: pixelated;
   max-width: 100%;
 }
 
+/* Temperature scale legend below the heatmap */
 .ir-legend {
   display: flex;
   align-items: center;
@@ -247,6 +262,7 @@ html, body, #root {
   font-size: 11px;
 }
 
+/* Gradient bar: blue (cold) → green → yellow → red (hot) */
 .ir-gradient {
   width: 100px;
   height: 8px;
@@ -255,6 +271,7 @@ html, body, #root {
 }
 
 /* ── GPS bar ────────────────────────────────────────────────────────────── */
+/* Compact single-row GPS status strip */
 .gps-bar {
   background: var(--card);
   border: 1px solid var(--border);
@@ -297,10 +314,11 @@ html, body, #root {
 .log-time { color: var(--muted); white-space: nowrap; min-width: 70px; }
 .log-msg  { color: #94a3b8; word-break: break-all; }
 
-.log-ok     .log-msg { color: #4ade80; }
-.log-err    .log-msg { color: #f87171; }
-.log-data   .log-msg { color: #7dd3fc; }
-.log-resend .log-msg { color: #fbbf24; }
+/* Colour-coded log levels (set by classifyLog() in App.jsx) */
+.log-ok     .log-msg { color: #4ade80; }  /* green  — success/complete */
+.log-err    .log-msg { color: #f87171; }  /* red    — error/warning */
+.log-data   .log-msg { color: #7dd3fc; }  /* blue   — packet received */
+.log-resend .log-msg { color: #fbbf24; }  /* amber  — ARQ resend event */
 
 /* ── Gallery ────────────────────────────────────────────────────────────── */
 .gallery-header {
@@ -313,6 +331,7 @@ html, body, #root {
 }
 .gallery-sub { color: var(--muted); font-size: 11px; }
 
+/* Responsive thumbnail grid — fills available width with 180px minimum tiles */
 .gallery-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
@@ -331,7 +350,7 @@ html, body, #root {
   transition: border-color 0.15s, transform 0.15s;
 }
 .gallery-thumb:hover { border-color: var(--accent); transform: scale(1.02); }
-.gallery-thumb.latest { border-color: #22c55e; }
+.gallery-thumb.latest { border-color: #22c55e; } /* green border on newest item */
 
 .gallery-thumb img {
   width: 100%; height: 100%;
@@ -339,6 +358,7 @@ html, body, #root {
   display: block;
 }
 
+/* Gradient overlay at the bottom of each thumbnail for the index/time labels */
 .thumb-overlay {
   position: absolute;
   bottom: 0; left: 0; right: 0;
@@ -352,6 +372,7 @@ html, body, #root {
 .thumb-num  { color: var(--accent); font-weight: 700; }
 .thumb-time { color: #94a3b8; }
 
+/* "LATEST" badge in top-right corner of newest thumbnail */
 .latest-badge {
   position: absolute;
   top: 6px; right: 6px;
@@ -365,6 +386,7 @@ html, body, #root {
 }
 
 /* ── Lightbox ───────────────────────────────────────────────────────────── */
+/* Full-screen modal overlay for enlarged image/IR view */
 .lightbox {
   position: fixed;
   inset: 0;
@@ -414,6 +436,7 @@ html, body, #root {
   background: #060a14;
 }
 
+/* Older/Newer navigation row at the bottom of the lightbox */
 .lightbox-nav {
   display: flex;
   justify-content: space-between;
@@ -441,13 +464,14 @@ html, body, #root {
 .empty-state p { margin-bottom: 6px; }
 .empty-sub { font-size: 12px; color: var(--muted); }
 
-/* ── Header right (Start/Stop controls) ─────────────────────────────────── */
+/* ── Header right — Start/Stop/Pause controls ────────────────────────────── */
 .header-right {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
+/* Action buttons for Start/Stop commands */
 .cmd-btn {
   border: none;
   border-radius: 6px;
@@ -467,6 +491,7 @@ html, body, #root {
 .cmd-btn.stop  { background: #ef4444; color: #fff; }
 .cmd-btn.stop:hover:not(:disabled)  { background: #f87171; }
 
+/* Transient feedback label shown for 2.5s after sending a command */
 .cmd-feedback {
   font-size: 11px;
   padding: 3px 8px;

@@ -1,3 +1,9 @@
+/**
+ * App.jsx — CubeSat SOAR26 Ground Station Dashboard
+ * ==================================================
+ * Main React component for the live telemetry dashboard.
+ */
+
 import { useState, useEffect, useRef, useCallback } from "react";
 import {
   LineChart, Line, ScatterChart, Scatter,
@@ -9,7 +15,6 @@ import "leaflet/dist/leaflet.css";
 import L from "leaflet";
 import "./App.css";
 
-// Fix leaflet default marker icons (broken in Vite/webpack by default)
 delete L.Icon.Default.prototype._getIconUrl;
 L.Icon.Default.mergeOptions({
   iconRetinaUrl: "https://unpkg.com/leaflet@1.9.4/dist/images/marker-icon-2x.png",
@@ -17,26 +22,34 @@ L.Icon.Default.mergeOptions({
   shadowUrl:     "https://unpkg.com/leaflet@1.9.4/dist/images/marker-shadow.png",
 });
 
-const API     = "http://localhost:5000/api";
+// Flask backend base URL — must match --flask-port in serial_listener.py
+const API = "http://localhost:5000/api";
+
+// How often to poll all API endpoints (milliseconds)
 const POLL_MS = 5000;
 
+// Chart color palette — shared across all charts and stat cards
 const C = {
   temp:   "#ff6b6b",
-  pres:   "#4ecdc4",
-  hum:    "#a29bfe",
-  alt:    "#ffd93d",
-  gpsAlt: "#55efc4",
-  border: "#1e293b",
-  muted:  "#64748b",
+  pres:   "#4ecdc4",  
+  hum:    "#a29bfe",  
+  alt:    "#ffd93d", 
+  gpsAlt: "#55efc4", 
+  border: "#1e293b",  
+  muted:  "#64748b", 
 };
 
-// Re-centers the map when the latest GPS point changes
+// ── MapUpdater ─────────────────────────────────────────────────────────────
+/**
+ * Helper component that re-centers the Leaflet map whenever the latest
+ * GPS coordinate changes. Must be rendered inside a <MapContainer>.
+ */
 function MapUpdater({ center }) {
   const map = useMap();
   useEffect(() => {
     if (center) map.setView(center, map.getZoom());
   }, [center, map]);
-  return null;
+  return null;  // renders nothing, just drives side effects
 }
 
 function StatCard({ label, value, unit, color }) {
@@ -62,20 +75,34 @@ function ChartTip({ active, payload }) {
   );
 }
 
+// ── IRHeatmap ──────────────────────────────────────────────────────────────
+/**
+ * Full-size IR heatmap rendered on a <canvas> element.
+ * Used in the IR lightbox overlay.
+ *
+ * The MLX90640 produces a 32×24 pixel thermal grid (768 float values).
+ * Each pixel is mapped through a cool→warm colour gradient:
+ *   cold (0.0) → blue (#4fc3f7)
+ *   mid  (0.5) → green (#00e676)
+ *   warm (0.75)→ yellow (#ffeb3b)
+ *   hot  (1.0) → red (#ff6b6b)
+ */
 function IRHeatmap({ frame, min, max }) {
   const canvasRef = useRef(null);
 
   useEffect(() => {
     if (!frame || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx    = canvas.getContext("2d");
     const W = 32, H = 24;
-    const cw = canvas.width / W;
+    const cw = canvas.width  / W;
     const ch = canvas.height / H;
+
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
         const val  = frame[y * W + x];
         const norm = Math.max(0, Math.min(1, (val - min) / (max - min || 1)));
+        // Gradient: blue → green → yellow → red
         const r = Math.round(255 * Math.min(1, norm * 2));
         const g = Math.round(255 * Math.min(1, norm < 0.5 ? norm * 2 : (1 - norm) * 2));
         const b = Math.round(255 * Math.max(0, 1 - norm * 2));
@@ -105,14 +132,20 @@ function IRHeatmap({ frame, min, max }) {
   );
 }
 
+// ── IRThumbnail ────────────────────────────────────────────────────────────
+/**
+ * Smaller IR heatmap used for gallery thumbnails (128×96 canvas).
+ * Same colour gradient logic as IRHeatmap, just smaller dimensions.
+ * Stretches to fill its parent container via width/height 100%.
+ */
 function IRThumbnail({ frame, min, max }) {
   const canvasRef = useRef(null);
   useEffect(() => {
     if (!frame || !canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
+    const ctx    = canvas.getContext("2d");
     const W = 32, H = 24;
-    const cw = canvas.width / W;
+    const cw = canvas.width  / W;
     const ch = canvas.height / H;
     for (let y = 0; y < H; y++) {
       for (let x = 0; x < W; x++) {
@@ -126,12 +159,15 @@ function IRThumbnail({ frame, min, max }) {
       }
     }
   }, [frame, min, max]);
-  return <canvas ref={canvasRef} width={128} height={96}
-    style={{ width: "100%", height: "100%", display: "block", imageRendering: "pixelated" }} />;
+  return (
+    <canvas ref={canvasRef} width={128} height={96}
+      style={{ width: "100%", height: "100%", display: "block", imageRendering: "pixelated" }} />
+  );
 }
 
+// ── App ────────────────────────────────────────────────────────────────────
 export default function App() {
-  const historyRef   = useRef([]);
+  const historyRef   = useRef([]);           
   const [chartData,  setChartData]  = useState([]);
   const [gallery,    setGallery]    = useState([]);
   const [selected,   setSelected]   = useState(null);
@@ -141,10 +177,15 @@ export default function App() {
   const [log,        setLog]        = useState([]);
   const [status,     setStatus]     = useState(null);
   const [activeTab,  setActiveTab]  = useState("sensors");
-  const [paused,     setPaused]     = useState(false);
-  const [cmdStatus,  setCmdStatus]  = useState(null);
-  const [mapLayer,   setMapLayer]   = useState("street"); // "street" | "satellite"
+  const [paused,     setPaused]     = useState(false); 
+  const [cmdStatus,  setCmdStatus]  = useState(null); 
+  const [mapLayer,   setMapLayer]   = useState("street");
 
+  // ── Commands ────────────────────────────────────────────────────────────
+  /**
+   * Send START or STOP to the Flask backend, which forwards it over serial
+   * to the Heltec receiver → ESP-NOW → XIAO sender.
+   */
   const sendCommand = useCallback(async (cmd) => {
     setCmdStatus("sending");
     try {
@@ -157,13 +198,20 @@ export default function App() {
     setTimeout(() => setCmdStatus(null), 2500);
   }, []);
 
+  // ── Fetch helpers ────────────────────────────────────────────────────────
+  /**
+   * Fetch sensor history and merge any new readings into chartData.
+   * Uses historyRef to avoid re-fetching unchanged data — only updates
+   * state when the server has more readings than we already have.
+   */
   const fetchHistory = useCallback(async () => {
     try {
-      const r = await fetch(`${API}/sensor-history`);
+      const r        = await fetch(`${API}/sensor-history`);
       const incoming = await r.json();
       if (!Array.isArray(incoming)) return;
       const prev = historyRef.current;
       if (incoming.length > prev.length) {
+        // Add a 1-based index for use as the X-axis label in charts
         const merged = incoming.map((r, i) => ({ ...r, idx: i + 1 }));
         historyRef.current = merged;
         setChartData([...merged]);
@@ -171,6 +219,12 @@ export default function App() {
     } catch { }
   }, []);
 
+  /**
+   * Fetch the full image gallery (newest first).
+   * Each entry includes a `version` field that increments when the image
+   * is reloaded after ARQ resends. The gallery key uses version so React
+   * remounts the <img> and fetches the updated src.
+   */
   const fetchGallery = useCallback(async () => {
     try {
       const r    = await fetch(`${API}/images-gallery`);
@@ -179,6 +233,7 @@ export default function App() {
     } catch { }
   }, []);
 
+  /** Fetch the latest IR frame for the live heatmap display. */
   const fetchIR = useCallback(async () => {
     try {
       const r    = await fetch(`${API}/ir`);
@@ -187,6 +242,7 @@ export default function App() {
     } catch { }
   }, []);
 
+  /** Fetch all IR frames this session (newest first) for the gallery. */
   const fetchIRGallery = useCallback(async () => {
     try {
       const r    = await fetch(`${API}/ir-gallery`);
@@ -195,6 +251,10 @@ export default function App() {
     } catch { }
   }, []);
 
+  /**
+   * Fetch the last ~80 serial log lines.
+   * Sliced to 80 here (server keeps 200) to avoid flooding the log panel.
+   */
   const fetchLog = useCallback(async () => {
     try {
       const r    = await fetch(`${API}/log`);
@@ -203,6 +263,7 @@ export default function App() {
     } catch { }
   }, []);
 
+  /** Fetch status summary for the header dot and reading counts. */
   const fetchStatus = useCallback(async () => {
     try {
       const r    = await fetch(`${API}/status`);
@@ -211,26 +272,43 @@ export default function App() {
     } catch { }
   }, []);
 
+  // ── Polling loop ─────────────────────────────────────────────────────────
+  /**
+   * Poll all endpoints every POLL_MS ms. Stops when paused=true.
+   * Runs an immediate poll on mount so the dashboard populates instantly.
+   */
   useEffect(() => {
     if (paused) return;
-    const poll = () => { fetchHistory(); fetchGallery(); fetchIR(); fetchIRGallery(); fetchLog(); fetchStatus(); };
+    const poll = () => {
+      fetchHistory();
+      fetchGallery();
+      fetchIR();
+      fetchIRGallery();
+      fetchLog();
+      fetchStatus();
+    };
     poll();
     const id = setInterval(poll, POLL_MS);
     return () => clearInterval(id);
   }, [paused, fetchHistory, fetchGallery, fetchIR, fetchIRGallery, fetchLog, fetchStatus]);
 
-  const latest = chartData[chartData.length - 1] ?? {};
+  // ── Derived values ────────────────────────────────────────────────────────
+  const latest = chartData[chartData.length - 1] ?? {};  // most recent sensor reading
   const maxAlt = chartData.length
     ? Math.max(...chartData.map((r) => r.alt ?? 0)).toFixed(1)
     : null;
 
-  // GPS track points using LoRa-stamped coordinates
+  // GPS track: use LoRa-stamped coords (loraLat/loraLon) which are the
+  // ground-station-received GPS values, filtering out 0,0 (no-fix) points.
   const gpsPoints = chartData
     .filter(r => r.loraLat && r.loraLon && (r.loraLat !== 0 || r.loraLon !== 0))
     .map(r => [r.loraLat, r.loraLon]);
   const lastGPS = gpsPoints[gpsPoints.length - 1] ?? null;
 
+  // Shared chart layout props
   const margin = { top: 8, right: 16, left: 0, bottom: 4 };
+
+  // Reusable axis components to keep chart JSX DRY
   const XAx = () => (
     <XAxis dataKey="idx" tick={{ fill: C.muted, fontSize: 11 }}
       label={{ value: "Reading #", position: "insideBottomRight", offset: -4, fill: C.muted, fontSize: 11 }} />
@@ -240,13 +318,15 @@ export default function App() {
       tickFormatter={(v) => `${v}${unit}`} width={width} />
   );
 
+  // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="app">
 
-      {/* Header */}
+      {/* ── Header ── */}
       <header className="header">
         <div className="header-left">
           <span className="header-title">🛸 CubeSat Ground Station</span>
+          {/* Green dot = Flask is reachable; red = connection failed */}
           <span className={`status-dot ${status?.ok ? "online" : "offline"}`} />
           <span className="status-text">
             {status?.ok
@@ -255,26 +335,30 @@ export default function App() {
           </span>
         </div>
         <div className="header-right">
+          {/* Transient feedback label shown for 2.5s after a command */}
           {cmdStatus && (
             <span className={`cmd-feedback ${cmdStatus}`}>
               {cmdStatus === "sending" ? "Sending…" : cmdStatus === "ok" ? "✓ Sent" : "✗ Failed"}
             </span>
           )}
+          {/* START → triggers capture-and-transmit cycle on the XIAO */}
           <button className="cmd-btn start" onClick={() => sendCommand("start")}
             disabled={cmdStatus === "sending"}>
             ▶ Start
           </button>
+          {/* STOP → halts the auto-capture loop on the XIAO */}
           <button className="cmd-btn stop" onClick={() => sendCommand("stop")}
             disabled={cmdStatus === "sending"}>
             ■ Stop
           </button>
+          {/* Pause freezes all polling without stopping the backend */}
           <button className={`pill-btn ${paused ? "active" : ""}`} onClick={() => setPaused(p => !p)}>
             {paused ? "⏸ Paused" : "⏸ Pause"}
           </button>
         </div>
       </header>
 
-      {/* Stat cards */}
+      {/* ── Stat cards ── */}
       <div className="stat-row">
         <StatCard label="Temperature"  value={latest.temp?.toFixed(1)}  unit="°C"   color={C.temp} />
         <StatCard label="Pressure"     value={latest.pres?.toFixed(1)}  unit="hPa"  color={C.pres} />
@@ -284,7 +368,7 @@ export default function App() {
         <StatCard label="GPS Sats"     value={latest.sats}              unit="sats" color={C.gpsAlt} />
       </div>
 
-      {/* Tabs */}
+      {/* ── Tab bar ── */}
       <div className="tab-bar">
         {[
           ["sensors", "📊 Sensors"],
@@ -296,6 +380,7 @@ export default function App() {
             className={`tab-btn ${activeTab === id ? "active" : ""}`}
             onClick={() => setActiveTab(id)}>
             {label}
+            {/* Green dot badge on Images tab when not active and images exist */}
             {id === "images" && gallery.length > 0 && activeTab !== "images" && (
               <span className="tab-badge" />
             )}
@@ -309,6 +394,8 @@ export default function App() {
           {chartData.length === 0 ? (
             <div className="empty-state">Waiting for sensor data…</div>
           ) : (<>
+
+            {/* Temperature over time */}
             <div className="chart-block">
               <h3 className="chart-title">Temperature <span>(°C)</span></h3>
               <ResponsiveContainer width="100%" height={220}>
@@ -321,6 +408,7 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
+            {/* Pressure and Humidity overlaid on one chart */}
             <div className="chart-block">
               <h3 className="chart-title">Pressure <span>(hPa)</span> &amp; Humidity <span>(%)</span></h3>
               <ResponsiveContainer width="100%" height={220}>
@@ -335,6 +423,7 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
+            {/* Barometric vs GPS altitude — useful for cross-validating sensor accuracy */}
             <div className="chart-block">
               <h3 className="chart-title">Altitude <span>Barometric vs GPS (m)</span></h3>
               <ResponsiveContainer width="100%" height={220}>
@@ -349,6 +438,7 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
+            {/* Scatter: temperature vs altitude — shows lapse rate */}
             <div className="chart-block">
               <h3 className="chart-title">Temperature vs Altitude <span>(scatter)</span></h3>
               <ResponsiveContainer width="100%" height={220}>
@@ -362,6 +452,7 @@ export default function App() {
               </ResponsiveContainer>
             </div>
 
+            {/* Scatter: pressure vs altitude — validates BMP390 barometric curve */}
             <div className="chart-block">
               <h3 className="chart-title">Pressure vs Altitude <span>(scatter)</span></h3>
               <ResponsiveContainer width="100%" height={220}>
@@ -382,7 +473,7 @@ export default function App() {
       {activeTab === "images" && (
         <div className="tab-content">
 
-          {/* Lightbox overlay */}
+          {/* Lightbox overlay for full-size JPEG view */}
           {selected !== null && gallery[selected] && (
             <div className="lightbox" onClick={() => setSelected(null)}>
               <div className="lightbox-inner" onClick={e => e.stopPropagation()}>
@@ -398,26 +489,19 @@ export default function App() {
                 </div>
                 <img src={gallery[selected].image} alt="CubeSat capture" className="lightbox-img" />
                 <div className="lightbox-nav">
-                  <button
-                    className="nav-btn"
-                    disabled={selected >= gallery.length - 1}
-                    onClick={() => setSelected(s => s + 1)}>
-                    ← Older
-                  </button>
+                  <button className="nav-btn" disabled={selected >= gallery.length - 1}
+                    onClick={() => setSelected(s => s + 1)}>← Older</button>
                   <span className="nav-label">
                     {new Date(gallery[selected].timestamp * 1000).toLocaleString()}
                   </span>
-                  <button
-                    className="nav-btn"
-                    disabled={selected <= 0}
-                    onClick={() => setSelected(s => s - 1)}>
-                    Newer →
-                  </button>
+                  <button className="nav-btn" disabled={selected <= 0}
+                    onClick={() => setSelected(s => s - 1)}>Newer →</button>
                 </div>
               </div>
             </div>
           )}
 
+          {/* JPEG gallery grid */}
           {gallery.length === 0 ? (
             <div className="empty-state">
               <p>📡 Waiting for first image…</p>
@@ -431,6 +515,8 @@ export default function App() {
               </div>
               <div className="gallery-grid">
                 {gallery.map((img, i) => (
+                  // Key includes version so React remounts the element (and reloads the src)
+                  // when the image is patched by an ARQ resend after initial assembly.
                   <div key={`${i}-v${img.version ?? 1}`} className={`gallery-thumb ${i === 0 ? "latest" : ""}`}
                     onClick={() => setSelected(i)}>
                     <img src={img.image} alt={`Capture ${gallery.length - i}`} />
@@ -454,7 +540,7 @@ export default function App() {
               <span className="gallery-sub">Click any frame to enlarge · newest first</span>
             </div>
 
-            {/* IR lightbox */}
+            {/* IR lightbox overlay */}
             {selectedIR !== null && irGallery[selectedIR] && (
               <div className="lightbox" onClick={() => setSelectedIR(null)}>
                 <div className="lightbox-inner" onClick={e => e.stopPropagation()}>
@@ -476,20 +562,19 @@ export default function App() {
                     />
                   </div>
                   <div className="lightbox-nav">
-                    <button className="nav-btn"
-                      disabled={selectedIR >= irGallery.length - 1}
+                    <button className="nav-btn" disabled={selectedIR >= irGallery.length - 1}
                       onClick={() => setSelectedIR(s => s + 1)}>← Older</button>
                     <span className="nav-label">
                       {new Date(irGallery[selectedIR].timestamp * 1000).toLocaleString()}
                     </span>
-                    <button className="nav-btn"
-                      disabled={selectedIR <= 0}
+                    <button className="nav-btn" disabled={selectedIR <= 0}
                       onClick={() => setSelectedIR(s => s - 1)}>Newer →</button>
                   </div>
                 </div>
               </div>
             )}
 
+            {/* IR thumbnail grid */}
             {irGallery.length === 0 ? (
               <div className="image-panel">
                 <div className="image-frame">
@@ -502,6 +587,7 @@ export default function App() {
             ) : (
               <div className="gallery-grid">
                 {irGallery.map((frame, i) => (
+                  // version-keyed same as JPEG gallery — forces remount after ARQ reload
                   <div key={`${i}-v${frame.version ?? 1}`}
                     className={`gallery-thumb ir-thumb ${i === 0 ? "latest" : ""}`}
                     onClick={() => setSelectedIR(i)}>
@@ -518,7 +604,6 @@ export default function App() {
               </div>
             )}
           </div>
-
         </div>
       )}
 
@@ -532,47 +617,36 @@ export default function App() {
             </div>
           ) : (
             <>
-              {/* Map layer toggle */}
+              {/* Map layer toggle: OpenStreetMap vs Esri World Imagery */}
               <div style={{ display: "flex", gap: 8, marginBottom: 10 }}>
-                <button
-                  onClick={() => setMapLayer("street")}
+                <button onClick={() => setMapLayer("street")}
                   style={{
                     padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                     background: mapLayer === "street" ? "#ffd93d" : "#1e293b",
                     color: mapLayer === "street" ? "#0f172a" : "#94a3b8",
                     border: "1px solid #334155", fontWeight: 600,
-                  }}>
-                  🗺 Street
-                </button>
-                <button
-                  onClick={() => setMapLayer("satellite")}
+                  }}>🗺 Street</button>
+                <button onClick={() => setMapLayer("satellite")}
                   style={{
                     padding: "6px 14px", borderRadius: 8, fontSize: 12, cursor: "pointer",
                     background: mapLayer === "satellite" ? "#ffd93d" : "#1e293b",
                     color: mapLayer === "satellite" ? "#0f172a" : "#94a3b8",
                     border: "1px solid #334155", fontWeight: 600,
-                  }}>
-                  🛰 Satellite
-                </button>
+                  }}>🛰 Satellite</button>
               </div>
 
-              {/* Leaflet map */}
+              {/* Leaflet map with flight path polyline and latest-position marker */}
               <div style={{ height: 460, borderRadius: 12, overflow: "hidden", border: "1px solid #1e293b", marginBottom: 24 }}>
-                <MapContainer
-                  center={lastGPS ?? [34.05, -118.24]}
-                  zoom={17}
-                  style={{ height: "100%", width: "100%" }}
-                >
+                <MapContainer center={lastGPS ?? [34.05, -118.24]} zoom={17}
+                  style={{ height: "100%", width: "100%" }}>
                   {mapLayer === "street" ? (
                     <TileLayer
                       url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-                    />
+                      attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors' />
                   ) : (
                     <TileLayer
                       url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-                      attribution='Tiles &copy; Esri &mdash; Source: Esri, USGS, NOAA'
-                    />
+                      attribution='Tiles &copy; Esri &mdash; Source: Esri, USGS, NOAA' />
                   )}
                   <MapUpdater center={lastGPS} />
                   {gpsPoints.length > 1 && (
@@ -592,7 +666,7 @@ export default function App() {
                 </MapContainer>
               </div>
 
-              {/* GPS history table */}
+              {/* GPS history table — all valid GPS points with sensor readings */}
               <div className="chart-block">
                 <h3 className="chart-title">GPS History <span>({gpsPoints.length} points)</span></h3>
                 <div style={{ overflowX: "auto" }}>
@@ -637,6 +711,7 @@ export default function App() {
       {/* ── Log tab ── */}
       {activeTab === "log" && (
         <div className="tab-content">
+          {/* Scrollable log panel, newest entries at top */}
           <div className="log-panel">
             {log.length === 0 ? (
               <div className="log-empty">No serial output yet…</div>
